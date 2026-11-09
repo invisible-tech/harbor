@@ -9,7 +9,20 @@ NOTIFICATIONS_PATH = CACHE_DIR / "notifications.json"
 DEFAULT_REGISTRY_URL = (
     "https://raw.githubusercontent.com/laude-institute/harbor/main/registry.json"
 )
-DEFAULT_HARBOR_REGISTRY_WEBSITE_URL = "https://hub.harborframework.com"
+# The Construct deployment this CLI talks to. HARBOR_CONSTRUCT_ENV=staging
+# selects the staging API; production is the default.
+CONSTRUCT_API_URLS = {
+    "production": "https://api.research.inv.tech",
+    "staging": "https://api.research.invsta.systems",
+}
+CONSTRUCT_ENV = (os.environ.get("HARBOR_CONSTRUCT_ENV") or "production").strip().lower()
+if CONSTRUCT_ENV not in CONSTRUCT_API_URLS:
+    raise ValueError(
+        f"HARBOR_CONSTRUCT_ENV must be one of {sorted(CONSTRUCT_API_URLS)}, "
+        f"got {CONSTRUCT_ENV!r}"
+    )
+CONSTRUCT_HUB_URL = f"{CONSTRUCT_API_URLS[CONSTRUCT_ENV]}/hub"
+DEFAULT_HARBOR_REGISTRY_WEBSITE_URL = CONSTRUCT_HUB_URL
 HARBOR_REGISTRY_WEBSITE_URL = os.environ.get(
     "HARBOR_REGISTRY_WEBSITE_URL", DEFAULT_HARBOR_REGISTRY_WEBSITE_URL
 )

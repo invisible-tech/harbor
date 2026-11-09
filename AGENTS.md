@@ -342,34 +342,37 @@ To pass arbitrary environment variables to an agent at runtime, use `--ae` / `--
 harbor run ... --ae AWS_REGION=us-east-1 --ae CUSTOM_VAR=value
 ```
 
-### Self-hosted hub
+### Construct hub
 
-Point the stock CLI at a Supabase-API-compatible backend, with tokens from an external CLI (e.g. `gcloud`):
+The CLI talks to the Construct production hub with no configuration. Authentication runs `gcloud auth print-identity-token`, so sign in once with `gcloud auth login`.
 
 ```bash
-# ~/.zshrc or a .env in cwd
-export HARBOR_SUPABASE_URL=https://hub-api.example.com
-export HARBOR_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
-export HARBOR_REGISTRY_WEBSITE_URL=https://hub.example.com           # optional; view links
-export HARBOR_ACCESS_TOKEN_COMMAND="gcloud auth print-identity-token" # optional; replaces `harbor auth login`
-
 gcloud auth login            # once, outside harbor
-harbor auth status           # -> "Token authentication (via HARBOR_ACCESS_TOKEN_COMMAND, https://hub-api.example.com)"
+harbor auth status           # -> "Token authentication (via HARBOR_ACCESS_TOKEN_COMMAND, https://api.research.inv.tech/hub)"
 harbor publish ./my-task
 harbor run -d org/ds --agent claude-code --upload   # token re-fetched on JWT expiry
 ```
 
+To use the staging hub, set one variable:
+
+```bash
+export HARBOR_CONSTRUCT_ENV=staging   # hub at https://api.research.invsta.systems/hub
+```
+
+Each setting can also be overridden on its own:
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `HARBOR_SUPABASE_URL` | Harbor hub | Base URL for REST, storage, functions (hub and legacy registry clients) |
-| `HARBOR_SUPABASE_PUBLISHABLE_KEY` | Harbor key | `apikey`; required when the URL is custom |
-| `HARBOR_REGISTRY_WEBSITE_URL` | `https://hub.harborframework.com` | Web links printed by the CLI |
-| `HARBOR_ACCESS_TOKEN_COMMAND` | unset | Command whose stdout is the bearer token; bypasses `HARBOR_API_KEY` and `~/.harbor/credentials.json` |
+| `HARBOR_CONSTRUCT_ENV` | `production` | `production` or `staging`; picks the Construct API host |
+| `HARBOR_SUPABASE_URL` | `<Construct API>/hub` | Base URL for REST, storage, functions |
+| `HARBOR_SUPABASE_PUBLISHABLE_KEY` | built-in placeholder | `apikey` header; the Construct hub authenticates by bearer token and ignores it |
+| `HARBOR_REGISTRY_WEBSITE_URL` | `<Construct API>/hub` | Web links printed by the CLI |
+| `HARBOR_ACCESS_TOKEN_COMMAND` | `gcloud auth print-identity-token` | Command whose stdout is the bearer token. The default applies only to the Construct hub URLs, and not when `HARBOR_API_KEY` is set or `~/.harbor/credentials.json` holds a valid key; set the variable to the empty string to use `HARBOR_API_KEY` or `~/.harbor/credentials.json` instead |
 
 Gotchas:
 - `HARBOR_SUPABASE_URL` also moves legacy dataset-name resolution (`-d name@version`, `harbor dataset list`); those only work if your host serves the legacy `dataset` table.
 - `--env-file` doesn't set these vars; export them or put them in `./.env`.
-- `gcloud auth print-identity-token` (JWT) vs `print-access-token` (opaque): use whichever your host validates.
+- `gcloud auth print-identity-token` (JWT) vs `print-access-token` (opaque): the Construct hub validates identity tokens.
 
 ## Common Tasks for AI Assistants
 

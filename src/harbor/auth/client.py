@@ -120,9 +120,10 @@ async def create_authenticated_client(
 ) -> "AsyncClient":
     """Return the shared Supabase async client for the active credential.
 
-    Anonymous (no env key, no stored login) when logged out — public reads
-    keep working; authenticated calls fail server-side or at
-    :func:`require_user_id`.
+    Uses the access token command when one is configured (the default for a
+    Construct hub URL), so every call needs that command to succeed. With an API
+    key and no command, it is anonymous when logged out — public reads keep
+    working; authenticated calls fail server-side or at :func:`require_user_id`.
     """
     global _cached
 
