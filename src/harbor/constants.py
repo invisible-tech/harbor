@@ -1,11 +1,6 @@
 import os
 from pathlib import Path
 
-from dotenv import find_dotenv, load_dotenv
-
-# Settings below may come from ./.env, so load it before reading any of them.
-load_dotenv(find_dotenv(usecwd=True))
-
 CACHE_DIR = Path("~/.cache/harbor").expanduser()
 TASK_CACHE_DIR = CACHE_DIR / "tasks"
 PACKAGE_CACHE_DIR = CACHE_DIR / "tasks" / "packages"
@@ -20,7 +15,7 @@ CONSTRUCT_API_URLS = {
     "production": "https://api.research.inv.tech",
     "staging": "https://api.research.invsta.systems",
 }
-CONSTRUCT_ENV = os.environ.get("HARBOR_CONSTRUCT_ENV") or "production"
+CONSTRUCT_ENV = (os.environ.get("HARBOR_CONSTRUCT_ENV") or "production").strip().lower()
 if CONSTRUCT_ENV not in CONSTRUCT_API_URLS:
     raise ValueError(
         f"HARBOR_CONSTRUCT_ENV must be one of {sorted(CONSTRUCT_API_URLS)}, "

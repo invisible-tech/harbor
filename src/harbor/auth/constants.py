@@ -2,7 +2,11 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from harbor.constants import CONSTRUCT_HUB_URL, HARBOR_REGISTRY_WEBSITE_URL
+from harbor.constants import (
+    CONSTRUCT_API_URLS,
+    CONSTRUCT_HUB_URL,
+    HARBOR_REGISTRY_WEBSITE_URL,
+)
 
 DEFAULT_SUPABASE_URL = CONSTRUCT_HUB_URL
 # The Construct hub authenticates by bearer token and ignores the apikey, but
@@ -15,14 +19,25 @@ SUPABASE_PUBLISHABLE_KEY = os.environ.get(
     "HARBOR_SUPABASE_PUBLISHABLE_KEY", DEFAULT_SUPABASE_PUBLISHABLE_KEY
 )
 
+CREDENTIALS_DIR = Path("~/.harbor").expanduser()
+CREDENTIALS_PATH = CREDENTIALS_DIR / "credentials.json"
+
+
+def _default_access_token_command() -> str | None:
+    """The built-in command applies to a Construct hub URL only, and never
+    overrides an API-key login (env key or stored credentials), so a gcloud
+    identity token is not sent to a custom host."""
+    if SUPABASE_URL not in {f"{url}/hub" for url in CONSTRUCT_API_URLS.values()}:
+        return None
+    if os.environ.get("HARBOR_API_KEY", "").strip() or CREDENTIALS_PATH.exists():
+        return None
+    return DEFAULT_ACCESS_TOKEN_COMMAND
+
+
 # Shell command printing a bearer token; replaces the API-key login entirely.
-# The built-in command applies unless HARBOR_API_KEY is set; setting
-# HARBOR_ACCESS_TOKEN_COMMAND to the empty string selects API-key login.
+# HARBOR_ACCESS_TOKEN_COMMAND="" selects API-key login explicitly.
 ACCESS_TOKEN_COMMAND = (
-    os.environ.get(
-        "HARBOR_ACCESS_TOKEN_COMMAND",
-        None if os.environ.get("HARBOR_API_KEY") else DEFAULT_ACCESS_TOKEN_COMMAND,
-    )
+    os.environ.get("HARBOR_ACCESS_TOKEN_COMMAND", _default_access_token_command())
     or None
 )
 
@@ -49,8 +64,6 @@ def assert_secure_supabase_url(url: str) -> None:
     )
 
 
-CREDENTIALS_DIR = Path("~/.harbor").expanduser()
-CREDENTIALS_PATH = CREDENTIALS_DIR / "credentials.json"
 # Pending PKCE verifier for OAuth flows that span two invocations
 # (`harbor auth login --no-browser` + `--callback-url`, or the viewer's
 # login-url/callback request pair).

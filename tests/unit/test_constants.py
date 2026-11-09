@@ -93,13 +93,8 @@ def test_construct_env_rejects_unknown_value() -> None:
         _reload_with_construct_env(None)
 
 
-def test_dotenv_file_selects_staging(tmp_path, monkeypatch) -> None:
-    (tmp_path / ".env").write_text("HARBOR_CONSTRUCT_ENV=staging\n")
-    monkeypatch.chdir(tmp_path)
+def test_construct_env_is_case_insensitive() -> None:
     try:
-        reloaded = _reload_with_construct_env(None)
-        assert reloaded.CONSTRUCT_ENV == "staging"
+        assert _reload_with_construct_env("Staging").CONSTRUCT_ENV == "staging"
     finally:
-        os.environ.pop("HARBOR_CONSTRUCT_ENV", None)
-        monkeypatch.chdir(tmp_path.parent)
         _reload_with_construct_env(None)
