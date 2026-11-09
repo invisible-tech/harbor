@@ -1,0 +1,68 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: "harbor"
+  title: "harbor"
+  description: "Harbor CLI fork connecting to Construct"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+    backstage.io/source-location: url:https://github.com/invisible-tech/harbor
+
+    # Required by Backstage GitHub integration and Jit security scanning.
+    github.com/project-slug: invisible-tech/harbor
+
+    invisible.io/owner-user: "jordan.feldstein"
+    invisible.io/repo-type: "Empty"
+
+    # Data classification — required input for security posture tracking.
+    # Valid values: internal, public, confidential, pii
+    security/data-classification: "internal"
+
+
+    # Jira JQL — used by Soundcheck to query Aikido-opened vulnerability tickets
+    # and enforce SLO compliance (critical ≤7d, high ≤30d, medium ≤60d).
+    atlassian.net/jql: 'project = RSRCH'
+
+
+    # Path to this service's Terraform directory in the infra repo.
+    # Used by Soundcheck to verify infrastructure is IaC-managed (not ClickOps).
+    # Format: src/terraform/gcp/infra/<project-name>
+    invisible.io/infra-path: "src/terraform/gcp/infra/harbor"
+
+spec:
+  type: "tool"
+
+  # IMPORTANT: lifecycle determines which security and compliance checks apply.
+  # - experimental: service is in development; security health checks do NOT apply.
+  # - production:   service is live; ALL security tracks and SLO checks apply.
+  # - deprecated:   service is being retired; compliance checks still apply until removed.
+  # Update this to 'production' when the service goes live. Do NOT leave as experimental
+  # for production workloads — this is audited by the Security team.
+  lifecycle: "experimental"
+
+  owner: "group:default/fde-ait"
+  domain: "core-tech"
+
+  slackChannel: "team-research-eng"
+
+  jiraProject: "RSRCH"
+
+  parameters:
+  - title: Project details
+    required:
+      - name
+      # - environments   # add here if you want it required
+    properties:
+      # ... other fields (name, owner, etc.) ...
+      environments:
+        title: Environments
+        type: array
+        items:
+          type: string
+          enum:
+            - production
+            - staging
+            - demo
+        uniqueItems: true
+        default: ["production", "staging", "demo"]
+        ui:widget: checkboxes

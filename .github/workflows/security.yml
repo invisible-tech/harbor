@@ -1,0 +1,258 @@
+
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    env:
+      FOSSA_API_URL: https://app.fossa.com/api
+
+    steps:
+      - name: Configure Tracebit canary credentials
+        uses: tracebit-com/tracebit-community-action@517c410eae144100a1995cd720094c010995994d
+        with:
+          api-token: ${{ secrets.TRACEBIT_API_TOKEN }}
+          profile: administrator
+          profile-region: us-east-1
+          async: true
+
+      - name: Resolve metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "head_sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+            echo "pr_number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate FOSSA API key
+        shell: bash
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FOSSA_API_KEY}" ]]; then
+            echo "FOSSA_API_KEY is not configured."
+            exit 1
+          fi
+
+      - name: Checkout HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.meta.outputs.head_sha }}
+
+      - name: Install FOSSA CLI
+        uses: fossas/fossa-action@v1
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: false
+
+      - name: Analyze and capture exact FOSSA metadata
+        id: fossa_analyze
+        shell: bash
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          fossa analyze --json > fossa_analyze.json
+
+          REVISION_LOCATOR="$(jq -r '.id' fossa_analyze.json)"
+          PROJECT_ID="$(jq -r '.projectId' fossa_analyze.json)"
+          REVISION="$(jq -r '.revision' fossa_analyze.json)"
+
+          if [[ -z "$REVISION_LOCATOR" || "$REVISION_LOCATOR" == "null" ]]; then
+            echo "Could not determine FOSSA revision locator from analyze output."
+            cat fossa_analyze.json
+            exit 1
+          fi
+
+          echo "revision_locator=$REVISION_LOCATOR" >> "$GITHUB_OUTPUT"
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for FOSSA and capture test output
+        id: fossa_test
+        continue-on-error: true
+        shell: bash
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          fossa test --format json --timeout 3600 > fossa_test.json 2> fossa_test.stderr
+          RC=$?
+          set -e
+
+      - name: Fetch issues using exact revision locator
+        id: fossa_check
+        shell: bash
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+          REVISION_LOCATOR: ${{ steps.fossa_analyze.outputs.revision_locator }}
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          DELIM="$(uuidgen)"
+
+          ENCODED_LOCATOR="$(
+            REVISION_LOCATOR="$REVISION_LOCATOR" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["REVISION_LOCATOR"], safe=""))'
+          )"
+
+          RESPONSE_FILE="$(mktemp)"
+          trap 'rm -f "$RESPONSE_FILE"' EXIT
+
+          HTTP_CODE=""
+          CURL_RC=0
+
+          set +e
+          HTTP_CODE="$(
+            curl --silent --show-error --fail-with-body --location \
+              --output "$RESPONSE_FILE" \
+              --write-out "%{http_code}" \
+              -H "Authorization: Bearer $FOSSA_API_KEY" \
+              "$FOSSA_API_URL/revisions/$ENCODED_LOCATOR/issues"
+          )"
+          CURL_RC=$?
+          set -e
+
+          RESPONSE_BODY="$(cat "$RESPONSE_FILE")"
+
+          if [[ "$CURL_RC" -ne 0 ]]; then
+            echo "status=error" >> "$GITHUB_OUTPUT"
+            {
+              echo "msg<<$DELIM"
+              echo "<!-- fossa-license-audit -->"
+              echo "### 🔎 FOSSA License Audit"
+              echo
+              echo "⚠️ FOSSA API request failed for revision \`$HEAD_SHA\` (HTTP ${HTTP_CODE:-unknown})."
+              echo
+              echo '```'
+              printf '%s\n' "$RESPONSE_BODY" | tail -n 40
+              echo '```'
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! printf '%s' "$RESPONSE_BODY" | jq -e '
+            if type == "array" then true
+            elif type == "object" and (.issues | type == "array") then true
+            else false
+            end
+          ' >/dev/null; then
+            echo "status=error" >> "$GITHUB_OUTPUT"
+            {
+              echo "msg<<$DELIM"
+              echo "<!-- fossa-license-audit -->"
+              echo "### 🔎 FOSSA License Audit"
+              echo
+              echo "⚠️ FOSSA API returned an unexpected payload for revision \`$HEAD_SHA\`."
+              echo
+              echo '```json'
+              printf '%s\n' "$RESPONSE_BODY" | tail -n 40
+              echo '```'
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          ISSUES="$(
+            printf '%s' "$RESPONSE_BODY" | jq -r '
+              (
+                if type == "array" then .
+                elif type == "object" and (.issues | type == "array") then .issues
+                else []
+                end
+              )
+              | [
+                  .[]
+                  | select((.resolved // false) == false)
+                  | "- **[\(.type // "issue")]**: \(.rule.licenseId // .licenseId // .license // "Unknown license") found in `\(.dependencyLocator // .revisionId // .locator // "unknown")`"
+                ]
+              | join("\n")
+            '
+          )"
+
+          if [[ -n "$ISSUES" ]]; then
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+            {
+              echo "msg<<$DELIM"
+              echo "<!-- fossa-license-audit -->"
+              echo "### ❌ FOSSA License Violations Found"
+              echo
+              echo "Revision: \`$HEAD_SHA\`"
+              echo
+              echo "$ISSUES"
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            {
+              echo "msg<<$DELIM"
+              echo "<!-- fossa-license-audit -->"
+              echo "### ✅ FOSSA License Audit Passed"
+              echo
+              echo "Revision: \`$HEAD_SHA\`"
+              echo
+              echo "No unresolved license violations found for this revision."
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Find existing PR comment
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        id: find_comment
+        uses: peter-evans/find-comment@v4
+        with:
+          issue-number: ${{ steps.meta.outputs.pr_number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- fossa-license-audit -->'
+
+      - name: Create PR comment
+        if: ${{ always() && github.event_name == 'pull_request' && steps.fossa_check.outcome == 'success' && steps.find_comment.outputs.comment-id == '' }}
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ steps.meta.outputs.pr_number }}
+          body: ${{ steps.fossa_check.outputs.msg }}
+          edit-mode: replace
+
+      - name: Update PR comment
+        if: ${{ always() && github.event_name == 'pull_request' && steps.fossa_check.outcome == 'success' && steps.find_comment.outputs.comment-id != '' }}
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ steps.meta.outputs.pr_number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          body: ${{ steps.fossa_check.outputs.msg }}
+          edit-mode: replace
+
+      - name: Block merge if FOSSA found issues
+        if: ${{ steps.fossa_check.outputs.status != 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "FOSSA license audit failed with status: ${{ steps.fossa_check.outputs.status }}"
+          exit 1
+

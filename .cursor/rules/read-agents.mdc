@@ -1,0 +1,14 @@
+---
+description: Load project agent index and AI context at session start
+alwaysApply: true
+---
+
+# Project context
+
+At the start of work in this repo, read and use:
+
+1. **agents.md** — Repository agent index: rules (`.dev/rules/`), architecture (`.dev/docs/architecture.md`), current mission (`.dev/specs/`), session memory (`.dev/memory.md`), skills (`.dev/skills/`).
+2. **claude.md** — Claude-specific pointers to the above.
+3. **gemini.md** — Gemini-specific pointers to the above.
+
+Follow the conventions and current mission referenced there.

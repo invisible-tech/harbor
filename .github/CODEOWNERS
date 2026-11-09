@@ -1,0 +1,6 @@
+# CODEOWNERS — defines who must review PRs for this repository.
+# Backstage Road to Production requires a CODEOWNERS file.
+# Format: <path pattern> <GitHub team>
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @invisible-tech/group:default/fde-ait
