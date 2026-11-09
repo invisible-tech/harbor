@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -23,13 +24,25 @@ CREDENTIALS_DIR = Path("~/.harbor").expanduser()
 CREDENTIALS_PATH = CREDENTIALS_DIR / "credentials.json"
 
 
+def _has_stored_api_key() -> bool:
+    # Mirrors harbor.auth.credentials.read_stored_credentials, which imports this
+    # module and so cannot be imported here.
+    try:
+        data = json.loads(CREDENTIALS_PATH.read_text())
+    except (OSError, ValueError):
+        return False
+    api_key = data.get("api_key") if isinstance(data, dict) else None
+    return isinstance(api_key, str) and api_key.startswith("sk-harbor-")
+
+
 def _default_access_token_command() -> str | None:
     """The built-in command applies to a Construct hub URL only, and never
-    overrides an API-key login (env key or stored credentials), so a gcloud
+    overrides an API-key login (env key or a usable stored key), so a gcloud
     identity token is not sent to a custom host."""
-    if SUPABASE_URL not in {f"{url}/hub" for url in CONSTRUCT_API_URLS.values()}:
+    construct_hubs = {f"{url}/hub" for url in CONSTRUCT_API_URLS.values()}
+    if SUPABASE_URL.rstrip("/").lower() not in construct_hubs:
         return None
-    if os.environ.get("HARBOR_API_KEY", "").strip() or CREDENTIALS_PATH.exists():
+    if os.environ.get("HARBOR_API_KEY", "").strip() or _has_stored_api_key():
         return None
     return DEFAULT_ACCESS_TOKEN_COMMAND
 

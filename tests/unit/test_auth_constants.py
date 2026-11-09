@@ -3,10 +3,15 @@ import os
 import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 import harbor.auth.constants as constants
 
+
+DEFAULT_COMMAND = "gcloud auth print-identity-token"
 
 ENV_KEYS = (
     "HOME",
@@ -92,16 +97,33 @@ def test_default_token_command_applies_to_staging_hub() -> None:
         assert reloaded.ACCESS_TOKEN_COMMAND == "gcloud auth print-identity-token"
 
 
-def test_stored_credentials_disable_default_token_command(tmp_path) -> None:
-    import harbor.auth.constants as c
+def _write_credentials(home: str, content: str) -> None:
+    path = Path(home) / ".harbor" / "credentials.json"
+    path.parent.mkdir()
+    path.write_text(content)
 
-    creds = tmp_path / "credentials.json"
-    creds.write_text("{}")
-    with patched_supabase_env({}) as reloaded:
-        reloaded.CREDENTIALS_PATH = creds
-        assert reloaded._default_access_token_command() is None
-        creds.unlink()
-        assert reloaded._default_access_token_command() == (
-            "gcloud auth print-identity-token"
-        )
-    assert c is not None
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ('{"api_key": "sk-harbor-abc"}', None),
+        ("", DEFAULT_COMMAND),
+        ('{"api_key": "legacy"}', DEFAULT_COMMAND),
+    ],
+)
+def test_only_a_usable_stored_key_disables_default_token_command(
+    content: str, expected: str | None
+) -> None:
+    with tempfile.TemporaryDirectory() as home:
+        _write_credentials(home, content)
+        with patched_supabase_env({"HOME": home}) as reloaded:
+            assert reloaded.ACCESS_TOKEN_COMMAND == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://api.research.inv.tech/hub/", "https://API.research.inv.tech/hub"],
+)
+def test_construct_url_spelling_keeps_default_token_command(url: str) -> None:
+    with patched_supabase_env({"HARBOR_SUPABASE_URL": url}) as reloaded:
+        assert reloaded.ACCESS_TOKEN_COMMAND == DEFAULT_COMMAND

@@ -29,7 +29,7 @@ pip install harbor
 
 ## Construct hub
 
-This fork publishes tasks to, and launches runs on, the Construct hub at `https://api.research.inv.tech/hub`. Sign in with `gcloud auth login`, then run `harbor publish ./my-task`. No environment variables are needed. Every hub call authenticates with `gcloud auth print-identity-token`; to use an API key instead, set `HARBOR_API_KEY`, run `harbor auth login`, or set `HARBOR_ACCESS_TOKEN_COMMAND=""`. A custom `HARBOR_SUPABASE_URL` never uses the gcloud token unless you set `HARBOR_ACCESS_TOKEN_COMMAND`.
+This fork publishes tasks to, and launches runs on, the Construct hub at `https://api.research.inv.tech/hub`. Sign in with `gcloud auth login`, then run `harbor publish ./my-task`. No environment variables are needed. Every hub call authenticates with `gcloud auth print-identity-token`; to use an API key instead, set `HARBOR_API_KEY`, or set `HARBOR_ACCESS_TOKEN_COMMAND=""` and run `harbor auth login` once. A custom `HARBOR_SUPABASE_URL` never uses the gcloud token unless you set `HARBOR_ACCESS_TOKEN_COMMAND`.
 
 To target staging, set `HARBOR_CONSTRUCT_ENV=staging`. The full list of overrides is in the "Construct hub" section of `AGENTS.md`.
 

@@ -367,7 +367,7 @@ Each setting can also be overridden on its own:
 | `HARBOR_SUPABASE_URL` | `<Construct API>/hub` | Base URL for REST, storage, functions |
 | `HARBOR_SUPABASE_PUBLISHABLE_KEY` | built-in placeholder | `apikey` header; the Construct hub authenticates by bearer token and ignores it |
 | `HARBOR_REGISTRY_WEBSITE_URL` | `<Construct API>/hub` | Web links printed by the CLI |
-| `HARBOR_ACCESS_TOKEN_COMMAND` | `gcloud auth print-identity-token` | Command whose stdout is the bearer token. The default applies only to the Construct hub URLs, and not when `HARBOR_API_KEY` is set or `~/.harbor/credentials.json` exists; set the variable to the empty string to use `HARBOR_API_KEY` or `~/.harbor/credentials.json` instead |
+| `HARBOR_ACCESS_TOKEN_COMMAND` | `gcloud auth print-identity-token` | Command whose stdout is the bearer token. The default applies only to the Construct hub URLs, and not when `HARBOR_API_KEY` is set or `~/.harbor/credentials.json` holds a valid key; set the variable to the empty string to use `HARBOR_API_KEY` or `~/.harbor/credentials.json` instead |
 
 Gotchas:
 - `HARBOR_SUPABASE_URL` also moves legacy dataset-name resolution (`-d name@version`, `harbor dataset list`); those only work if your host serves the legacy `dataset` table.
