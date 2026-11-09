@@ -2,11 +2,14 @@ import os
 
 from dotenv import load_dotenv
 
+from harbor.auth.constants import (
+    DEFAULT_SUPABASE_PUBLISHABLE_KEY,
+    DEFAULT_SUPABASE_URL,
+)
+
 load_dotenv()
 
-HARBOR_SUPABASE_URL = os.environ.get(
-    "HARBOR_SUPABASE_URL", "https://hlqxxzsirfrgeqasvaps.supabase.co"
-)
+HARBOR_SUPABASE_URL = os.environ.get("HARBOR_SUPABASE_URL", DEFAULT_SUPABASE_URL)
 HARBOR_SUPABASE_PUBLISHABLE_KEY = os.environ.get(
-    "HARBOR_SUPABASE_PUBLISHABLE_KEY", "sb_publishable_RGMKhIM1NKzZ8bL3qCVNuA_5TsD6rbF"
+    "HARBOR_SUPABASE_PUBLISHABLE_KEY", DEFAULT_SUPABASE_PUBLISHABLE_KEY
 )

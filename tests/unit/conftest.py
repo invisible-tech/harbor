@@ -39,4 +39,6 @@ def isolated_environment():
             if name.upper() not in preserved and not name.startswith("LC_"):
                 monkeypatch.delenv(name)
         monkeypatch.setenv("HARBOR_TELEMETRY", "off")
+        # The built-in token command would shell out to gcloud; tests opt in.
+        monkeypatch.setattr("harbor.auth.constants.ACCESS_TOKEN_COMMAND", None)
         yield

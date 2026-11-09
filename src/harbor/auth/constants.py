@@ -2,10 +2,13 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from harbor.constants import HARBOR_REGISTRY_WEBSITE_URL
+from harbor.constants import CONSTRUCT_HUB_URL, HARBOR_REGISTRY_WEBSITE_URL
 
-DEFAULT_SUPABASE_URL = "https://ofhuhcpkvzjlejydnvyd.supabase.co"
-DEFAULT_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_Z-vuQbpvpG-PStjbh4yE0Q_e-d3MTIH"
+DEFAULT_SUPABASE_URL = CONSTRUCT_HUB_URL
+# The Construct hub authenticates by bearer token and ignores the apikey, but
+# the client requires a non-empty one.
+DEFAULT_SUPABASE_PUBLISHABLE_KEY = "construct-hub-no-apikey"
+DEFAULT_ACCESS_TOKEN_COMMAND = "gcloud auth print-identity-token"
 
 SUPABASE_URL = os.environ.get("HARBOR_SUPABASE_URL", DEFAULT_SUPABASE_URL)
 SUPABASE_PUBLISHABLE_KEY = os.environ.get(
@@ -13,7 +16,10 @@ SUPABASE_PUBLISHABLE_KEY = os.environ.get(
 )
 
 # Shell command printing a bearer token; replaces the API-key login entirely.
-ACCESS_TOKEN_COMMAND = os.environ.get("HARBOR_ACCESS_TOKEN_COMMAND") or None
+# Setting HARBOR_ACCESS_TOKEN_COMMAND to the empty string selects API-key login.
+ACCESS_TOKEN_COMMAND = (
+    os.environ.get("HARBOR_ACCESS_TOKEN_COMMAND", DEFAULT_ACCESS_TOKEN_COMMAND) or None
+)
 
 SUPABASE_REQUEST_TIMEOUT_SECONDS = 30.0
 

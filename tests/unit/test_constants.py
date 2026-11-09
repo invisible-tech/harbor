@@ -4,6 +4,8 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from types import ModuleType
 
+import pytest
+
 import harbor.constants as constants
 
 
@@ -48,3 +50,44 @@ def test_harbor_registry_website_url_prefers_env() -> None:
         )
         assert reloaded.HARBOR_VIEWER_WEBSITE_URL == "https://branch.harbor.test"
         assert reloaded.HARBOR_VIEWER_JOBS_URL == "https://branch.harbor.test/jobs"
+
+
+def _reload_with_construct_env(value: str | None) -> ModuleType:
+    original = os.environ.get("HARBOR_CONSTRUCT_ENV")
+    try:
+        if value is None:
+            os.environ.pop("HARBOR_CONSTRUCT_ENV", None)
+        else:
+            os.environ["HARBOR_CONSTRUCT_ENV"] = value
+        return importlib.reload(constants)
+    finally:
+        if original is None:
+            os.environ.pop("HARBOR_CONSTRUCT_ENV", None)
+        else:
+            os.environ["HARBOR_CONSTRUCT_ENV"] = original
+
+
+def test_hub_url_defaults_to_construct_production() -> None:
+    try:
+        with patched_harbor_registry_website_url(None) as reloaded:
+            assert reloaded.CONSTRUCT_HUB_URL == "https://api.research.inv.tech/hub"
+            assert reloaded.HARBOR_REGISTRY_WEBSITE_URL == reloaded.CONSTRUCT_HUB_URL
+    finally:
+        importlib.reload(constants)
+
+
+def test_construct_env_staging_selects_staging_hub() -> None:
+    try:
+        reloaded = _reload_with_construct_env("staging")
+        assert reloaded.CONSTRUCT_HUB_URL == "https://api.research.invsta.systems/hub"
+        assert reloaded.HARBOR_REGISTRY_WEBSITE_URL == reloaded.CONSTRUCT_HUB_URL
+    finally:
+        _reload_with_construct_env(None)
+
+
+def test_construct_env_rejects_unknown_value() -> None:
+    try:
+        with pytest.raises(ValueError, match="HARBOR_CONSTRUCT_ENV"):
+            _reload_with_construct_env("qa")
+    finally:
+        _reload_with_construct_env(None)

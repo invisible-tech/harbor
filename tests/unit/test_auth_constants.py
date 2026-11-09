@@ -8,6 +8,7 @@ import harbor.auth.constants as constants
 
 
 ENV_KEYS = (
+    "HARBOR_ACCESS_TOKEN_COMMAND",
     "HARBOR_SUPABASE_URL",
     "HARBOR_SUPABASE_PUBLISHABLE_KEY",
 )
@@ -48,3 +49,15 @@ def test_auth_constants_prefer_harbor_supabase_env() -> None:
     ) as reloaded:
         assert reloaded.SUPABASE_URL == "https://branch.supabase.co"
         assert reloaded.SUPABASE_PUBLISHABLE_KEY == "sb_publishable_branch"
+
+
+def test_auth_constants_default_to_construct_production() -> None:
+    with patched_supabase_env({}) as reloaded:
+        assert reloaded.SUPABASE_URL == "https://api.research.inv.tech/hub"
+        assert reloaded.SUPABASE_PUBLISHABLE_KEY
+        assert reloaded.ACCESS_TOKEN_COMMAND == "gcloud auth print-identity-token"
+
+
+def test_empty_access_token_command_selects_api_key_login() -> None:
+    with patched_supabase_env({"HARBOR_ACCESS_TOKEN_COMMAND": ""}) as reloaded:
+        assert reloaded.ACCESS_TOKEN_COMMAND is None

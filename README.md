@@ -27,6 +27,12 @@ pip install harbor
 ```
 
 
+## Construct hub
+
+This fork publishes tasks to, and launches runs on, the Construct hub at `https://api.research.inv.tech/hub`. Sign in with `gcloud auth login`, then run `harbor publish ./my-task`. No environment variables are needed.
+
+To target staging, set `HARBOR_CONSTRUCT_ENV=staging`. The full list of overrides is in the "Construct hub" section of `AGENTS.md`.
+
 ## Example: Running Terminal-Bench-2.0
 Harbor is the official harness for [Terminal-Bench-2.0](https://github.com/laude-institute/terminal-bench-2):
 
