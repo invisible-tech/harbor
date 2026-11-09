@@ -1,5 +1,0 @@
-site_name: harbor Documentation
-plugins:
-  - techdocs-core
-nav:
-  - Home: index.md
