@@ -16,9 +16,14 @@ SUPABASE_PUBLISHABLE_KEY = os.environ.get(
 )
 
 # Shell command printing a bearer token; replaces the API-key login entirely.
-# Setting HARBOR_ACCESS_TOKEN_COMMAND to the empty string selects API-key login.
+# The built-in command applies unless HARBOR_API_KEY is set; setting
+# HARBOR_ACCESS_TOKEN_COMMAND to the empty string selects API-key login.
 ACCESS_TOKEN_COMMAND = (
-    os.environ.get("HARBOR_ACCESS_TOKEN_COMMAND", DEFAULT_ACCESS_TOKEN_COMMAND) or None
+    os.environ.get(
+        "HARBOR_ACCESS_TOKEN_COMMAND",
+        None if os.environ.get("HARBOR_API_KEY") else DEFAULT_ACCESS_TOKEN_COMMAND,
+    )
+    or None
 )
 
 SUPABASE_REQUEST_TIMEOUT_SECONDS = 30.0
@@ -33,14 +38,6 @@ def assert_secure_supabase_url(url: str) -> None:
     """Refuse to send credentials over a non-TLS URL (loopback dev excepted)."""
     from harbor.auth.errors import AuthenticationError
 
-    if (
-        SUPABASE_URL != DEFAULT_SUPABASE_URL
-        and SUPABASE_PUBLISHABLE_KEY == DEFAULT_SUPABASE_PUBLISHABLE_KEY
-    ):
-        raise AuthenticationError(
-            "HARBOR_SUPABASE_URL is set to a custom host but "
-            "HARBOR_SUPABASE_PUBLISHABLE_KEY is not; set both."
-        )
     parsed = urlparse(url)
     if parsed.scheme == "https":
         return

@@ -1,6 +1,11 @@
 import os
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
+
+# Settings below may come from ./.env, so load it before reading any of them.
+load_dotenv(find_dotenv(usecwd=True))
+
 CACHE_DIR = Path("~/.cache/harbor").expanduser()
 TASK_CACHE_DIR = CACHE_DIR / "tasks"
 PACKAGE_CACHE_DIR = CACHE_DIR / "tasks" / "packages"

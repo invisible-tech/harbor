@@ -26,10 +26,9 @@ def _isolate():
     tokens.invalidate_token()
 
 
-def test_custom_url_with_default_key_is_refused(monkeypatch):
+def test_custom_url_with_default_key_is_allowed(monkeypatch):
     monkeypatch.setattr(C, "SUPABASE_URL", "https://hub.example")
-    with pytest.raises(AuthenticationError, match="PUBLISHABLE_KEY"):
-        C.assert_secure_supabase_url("https://hub.example/x")
+    C.assert_secure_supabase_url("https://hub.example/x")
 
 
 def test_custom_url_with_custom_key_is_allowed(monkeypatch):
