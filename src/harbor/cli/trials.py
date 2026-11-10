@@ -1078,8 +1078,8 @@ def regrade(
     source: Annotated[
         str,
         Argument(
-            help="Source trial directory, or a Harbor hub trial UUID to "
-            "download and re-score. Never modified."
+            help="Source trial directory, a Harbor Hub trial UUID, or (with "
+            "--launch) a Construct episode id. Never modified."
         ),
     ],
     task_path: Annotated[
@@ -1099,7 +1099,8 @@ def regrade(
         bool,
         Option(
             "--launch",
-            help="Create a hosted verifier-only job from a Hub trial UUID.",
+            help="Create a hosted verifier-only job from a Hub trial UUID or "
+            "Construct episode id.",
             rich_help_panel="Harbor Hub",
         ),
     ] = False,
@@ -1222,8 +1223,9 @@ def regrade(
 ):
     """Re-run verification for a recorded trial with a new verifier.
 
-    SOURCE is a local trial directory, or a hub trial UUID which is
-    downloaded first. Creates a new trial directory seeded with the source
+    SOURCE is a local trial directory, a hub trial UUID, or (with --launch)
+    a Construct episode id. Hub trial UUIDs are downloaded first. Creates a
+    new trial directory seeded with the source
     trial's agent logs and artifacts, then runs the given task's verifier
     against them in a separate verifier environment. Multi-step tasks are
     supported when every step uses a separate verifier and the source contains
@@ -1263,7 +1265,7 @@ def regrade(
                 "Hosted regrade uses the task verifier and hosted environment."
             )
         run_hosted_regrade(
-            source=HostedRegradeSource(source_trial_ids=[UUID(source)]),
+            source=HostedRegradeSource(source_trial_ids=[source]),
             tasks=[task_config],
             org=org,
             stored_secret=stored_secret,

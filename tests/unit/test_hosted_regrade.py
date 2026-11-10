@@ -40,13 +40,43 @@ def test_launch_registry_regrade_uses_normal_launcher(monkeypatch):
         lambda **kwargs: captured.update(kwargs),
     )
     regrade(str(SOURCE), task_ref="example/task@2", launch=True, org="example")
-    assert captured["regrade"].source_trial_ids == [SOURCE]
+    assert captured["regrade"].source_trial_ids == [str(SOURCE)]
     config = captured["config"]
     assert config.tasks[0].name == "example/task"
     assert config.tasks[0].ref == "2"
     assert config.agents[0].name == "nop"
     assert config.agents[0].secrets == []
     assert config.n_attempts == config.n_concurrent_trials == 1
+
+
+def test_launch_registry_regrade_accepts_construct_episode_id(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "harbor.cli.hosted_jobs.run_hosted_launch",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    source = "ep_a4cb9a458dfe"
+    regrade(source, task_ref="example/task@2", launch=True, org="example")
+    assert captured["regrade"].source_trial_ids == [source]
+    assert captured["regrade"].request_payload() == {"source_trial_id": source}
+
+
+def test_regrade_source_normalizes_uuid_to_string():
+    selection = HostedRegradeSource(source_trial_ids=[SOURCE])
+    assert selection.source_trial_ids == [str(SOURCE)]
+
+
+@pytest.mark.parametrize("source", ["nope", "ep_hub_abc", "EP_1"])
+def test_invalid_regrade_source_ids_are_rejected(source):
+    with pytest.raises(ValueError):
+        HostedRegradeSource(source_trial_ids=[source])
+
+
+def test_regrade_source_rejects_duplicate_after_normalization():
+    with pytest.raises(ValueError, match="distinct"):
+        HostedRegradeSource(
+            source_trial_ids=[SOURCE, str(SOURCE)], source_job_id=SOURCE
+        )
 
 
 def test_launch_requires_explicit_source_org():
@@ -77,7 +107,7 @@ async def test_submit_regrade_reference_is_outside_config(monkeypatch):
             agents=[HostedAgentConfig(name="nop", secrets=[])],
         ),
         organization="example",
-        regrade=HostedRegradeSource(source_trial_ids=[SOURCE]),
+        regrade=HostedRegradeSource(source_trial_ids=[str(SOURCE)]),
         dry_run=True,
     )
     body = captured["request_body"]
@@ -120,7 +150,7 @@ def test_job_launch_uses_one_submission_without_downloading_sources(
     )
     selection = captured["regrade"]
     assert selection.source_job_id == SOURCE
-    assert selection.source_trial_ids == [SOURCE, other]
+    assert selection.source_trial_ids == [str(SOURCE), str(other)]
     assert [task.name for task in captured["config"].tasks] == [
         "example/task",
         "example/other",
@@ -154,7 +184,7 @@ def test_job_launch_defaults_to_recorded_trials(monkeypatch):
     )
     job_regrade(str(SOURCE), task_refs=["example/task@2"], launch=True, org="example")
     lookup.assert_awaited_once_with(SOURCE)
-    assert captured["regrade"].source_trial_ids == [row.id for row in rows[:-1]]
+    assert captured["regrade"].source_trial_ids == [str(row.id) for row in rows[:-1]]
     assert len(captured["config"].tasks) == 1
 
 
