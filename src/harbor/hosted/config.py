@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
-from typing import Self
+from typing import Final, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -12,13 +13,34 @@ from harbor.hosted.api import ENV_VAR_RE
 from harbor.models.job.config import JobConfig, RetryConfig
 from harbor.models.trial.config import AgentConfig, TrialConfig
 
+HUB_TRIAL_ID_RE: Final = re.compile(r"ep_(?:[0-9a-f]+|hub_[0-9a-f]{32})")
+
+
+def _source_trial_id(value: object) -> str:
+    """A trial UUID or a Construct episode id, as the string the server reads."""
+    try:
+        return str(UUID(str(value)))
+    except ValueError:
+        if isinstance(value, str) and HUB_TRIAL_ID_RE.fullmatch(value):
+            return value
+        raise ValueError(
+            f"{value!r} must be a trial UUID or a Construct episode id (ep_...)"
+        ) from None
+
 
 class HostedRegradeSource(BaseModel):
     """Explicit source selection for one hosted regrade job."""
 
     model_config = ConfigDict(extra="forbid")
-    source_trial_ids: list[UUID] = Field(min_length=1, max_length=50_000)
+    source_trial_ids: list[str] = Field(min_length=1, max_length=50_000)
     source_job_id: UUID | None = None
+
+    @field_validator("source_trial_ids", mode="before")
+    @classmethod
+    def normalize_source_trial_ids(cls, value: object) -> object:
+        if not isinstance(value, (list, tuple)):
+            return value
+        return [_source_trial_id(v) for v in value]
 
     @model_validator(mode="after")
     def validate_selection(self) -> Self:
@@ -30,7 +52,7 @@ class HostedRegradeSource(BaseModel):
 
     def request_payload(self) -> dict[str, object]:
         if self.source_job_id is None:
-            return {"source_trial_id": str(self.source_trial_ids[0])}
+            return {"source_trial_id": self.source_trial_ids[0]}
         return self.model_dump(mode="json")
 
 

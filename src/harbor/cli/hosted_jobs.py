@@ -785,7 +785,7 @@ async def prepare_hosted_job_regrade(
 
     # This is the same paginated, retry-ranked selection as job download.
     rows = await UploadDB().list_trial_downloads_for_job(job_id)
-    trial_ids = [row.id for row in rows if row.archive_path]
+    trial_ids = [str(row.id) for row in rows if row.archive_path]
     if not trial_ids:
         raise ValueError("No recorded trials found to regrade in this job.")
     selection = HostedRegradeSource(source_job_id=job_id, source_trial_ids=trial_ids)
