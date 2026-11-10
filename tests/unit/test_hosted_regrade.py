@@ -66,10 +66,10 @@ def test_regrade_source_normalizes_uuid_to_string():
     assert selection.source_trial_ids == [str(SOURCE)]
 
 
-@pytest.mark.parametrize("source", ["nope", "ep_hub_abc", "EP_1"])
-def test_invalid_regrade_source_ids_are_rejected(source):
+@pytest.mark.parametrize("ids", [["nope"], ["ep_hub_abc"], ["EP_1"], ("nope",), []])
+def test_invalid_regrade_source_ids_are_rejected(ids):
     with pytest.raises(ValueError):
-        HostedRegradeSource(source_trial_ids=[source])
+        HostedRegradeSource(source_trial_ids=ids)
 
 
 def test_regrade_source_rejects_duplicate_after_normalization():

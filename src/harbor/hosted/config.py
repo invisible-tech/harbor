@@ -38,7 +38,7 @@ class HostedRegradeSource(BaseModel):
     @field_validator("source_trial_ids", mode="before")
     @classmethod
     def normalize_source_trial_ids(cls, value: object) -> object:
-        if not isinstance(value, list):
+        if not isinstance(value, (list, tuple)):
             return value
         return [_source_trial_id(v) for v in value]
 
@@ -52,7 +52,7 @@ class HostedRegradeSource(BaseModel):
 
     def request_payload(self) -> dict[str, object]:
         if self.source_job_id is None:
-            return {"source_trial_id": str(self.source_trial_ids[0])}
+            return {"source_trial_id": self.source_trial_ids[0]}
         return self.model_dump(mode="json")
 
 
