@@ -15,6 +15,7 @@ DEFAULT_COMMAND = "gcloud auth print-identity-token"
 
 ENV_KEYS = (
     "HOME",
+    "USERPROFILE",
     "HARBOR_CONSTRUCT_ENV",
     "HARBOR_API_KEY",
     "HARBOR_ACCESS_TOKEN_COMMAND",
@@ -32,6 +33,7 @@ def patched_supabase_env(values: dict[str, str]) -> Generator[ModuleType, None, 
         # An empty HOME keeps a stored ~/.harbor/credentials.json out of the test.
         with tempfile.TemporaryDirectory() as home:
             os.environ["HOME"] = home
+            os.environ["USERPROFILE"] = home  # Windows expanduser reads this
             os.environ.update(values)
             yield importlib.reload(constants)
     finally:
