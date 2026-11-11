@@ -72,6 +72,29 @@ jobs:
     timeout-minutes: 15
     steps: *non-runtime-steps
 
+  fork-only:
+    name: Fork-only behaviour (ubuntu-26.04)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+          cache-suffix: test
+      - name: Install test dependencies
+        run: uv sync --locked --all-packages --all-extras
+      - name: Run fork-only tests
+        run: >-
+          uv run pytest $(cat tests/fork_tests.txt) -m "not runtime"
+          --cov=src/harbor
+          --cov=packages/rewardkit/src/rewardkit --cov-report=term-missing
+      - name: Enforce fork-only coverage
+        run: >-
+          uv run coverage report
+          --include="src/harbor/auth/tokens.py,src/harbor/auth/constants.py,src/harbor/auth/client.py,src/harbor/storage/resumable.py,src/harbor/publisher/packager.py,packages/rewardkit/src/rewardkit/judges.py"
+          --fail-under=85
+
   runtime:
     name: Runtime (${{ matrix.suite }})
     runs-on: ubuntu-26.04
@@ -192,7 +215,7 @@ jobs:
   linux-result:
     name: test (ubuntu-latest)
     if: always()
-    needs: [non-runtime-linux, runtime]
+    needs: [non-runtime-linux, runtime, fork-only]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
