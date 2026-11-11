@@ -40,17 +40,20 @@ class Packager:
         paths = TaskPaths(task_dir)
         file_filter = TaskFileFilter(task_dir)
 
-        lines = list(DENY_LIST)
+        deny = pathspec.PathSpec.from_lines("gitignore", DENY_LIST)
+        ignore_lines: list[str] = []
         if paths.gitignore_path.exists():
-            lines += paths.gitignore_path.read_text().splitlines()
-        spec = pathspec.PathSpec.from_lines("gitignore", lines)
+            ignore_lines = paths.gitignore_path.read_text().splitlines()
+        spec = pathspec.PathSpec.from_lines("gitignore", ignore_lines)
 
         # .harborignore rules (tests/solution scopes) come from TaskFileFilter.
         selection = select_files(task_dir, exclude=file_filter.is_excluded)
         files = [
             task_dir / rel
             for rel in selection.relative_paths
-            if (task_dir / rel).is_file() and not spec.match_file(rel.as_posix())
+            if (task_dir / rel).is_file()
+            and not deny.match_file(rel.as_posix())
+            and not spec.match_file(rel.as_posix())
         ]
 
         files.sort(key=lambda p: p.relative_to(task_dir).as_posix())
