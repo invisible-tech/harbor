@@ -15,6 +15,7 @@ DEFAULT_COMMAND = "gcloud auth print-identity-token"
 
 ENV_KEYS = (
     "HOME",
+    "USERPROFILE",
     "HARBOR_CONSTRUCT_ENV",
     "HARBOR_API_KEY",
     "HARBOR_ACCESS_TOKEN_COMMAND",
@@ -32,6 +33,7 @@ def patched_supabase_env(values: dict[str, str]) -> Generator[ModuleType, None, 
         # An empty HOME keeps a stored ~/.harbor/credentials.json out of the test.
         with tempfile.TemporaryDirectory() as home:
             os.environ["HOME"] = home
+            os.environ["USERPROFILE"] = home  # Windows expanduser reads this
             os.environ.update(values)
             yield importlib.reload(constants)
     finally:
@@ -116,7 +118,7 @@ def test_only_a_usable_stored_key_disables_default_token_command(
 ) -> None:
     with tempfile.TemporaryDirectory() as home:
         _write_credentials(home, content)
-        with patched_supabase_env({"HOME": home}) as reloaded:
+        with patched_supabase_env({"HOME": home, "USERPROFILE": home}) as reloaded:
             assert reloaded.ACCESS_TOKEN_COMMAND == expected
 
 
