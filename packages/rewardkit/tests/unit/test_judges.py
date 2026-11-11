@@ -30,6 +30,7 @@ from rewardkit.judges import (
 )
 from rewardkit.models import (
     AgentJudge,
+    Binary,
     Criterion,
     JevJudge,
     JudgeResult,
@@ -100,10 +101,65 @@ class TestBuildCriteriaBlock:
         block = _build_criteria_block(criteria)
         # The example block is the JSON portion at the end.
         example_json = block.rsplit("Example:\n", 1)[-1]
-        assert json.loads(example_json) == {"score": 1, "reasoning": "..."}
+        assert json.loads(example_json) == {"score": "no", "reasoning": "..."}
         # 'alpha' still appears earlier in the criterion bullet line, but not
         # as a wrapping key in the example.
         assert '"alpha":' not in example_json
+
+    @pytest.mark.parametrize(
+        "output_format", [Likert(), Numeric(), Rubric(levels=("bad", "good"))]
+    )
+    def test_single_example_score_is_the_lowest_valid_score(self, output_format):
+        criteria = [Criterion(description="a", output_format=output_format)]
+        example_json = _build_criteria_block(criteria).rsplit("Example:\n", 1)[-1]
+        score = json.loads(example_json)["score"]
+        assert output_format.normalize(score) == 0.0
+
+    def test_batched_example_scores_follow_each_schema(self):
+        criteria = [
+            Criterion(description="a", name="alpha"),
+            Criterion(description="b", name="beta", output_format=Likert()),
+        ]
+        example_json = _build_criteria_block(criteria).rsplit("Example:\n", 1)[-1]
+        example = json.loads(example_json)
+        assert example["alpha"]["score"] == "no"
+        assert example["beta"]["score"] == 3
+
+    def test_batched_numeric_example_scores_mix_low_middle_and_high(self):
+        criteria = [
+            Criterion(description=str(i), name=f"c{i}", output_format=Numeric())
+            for i in range(4)
+        ]
+        example_json = _build_criteria_block(criteria).rsplit("Example:\n", 1)[-1]
+        example = json.loads(example_json)
+        assert [example[f"c{i}"]["score"] for i in range(4)] == [0.0, 0.5, 1.0, 0.0]
+
+    def test_batched_binary_example_scores_alternate(self):
+        criteria = [Criterion(description=str(i), name=f"c{i}") for i in range(3)]
+        example_json = _build_criteria_block(criteria).rsplit("Example:\n", 1)[-1]
+        example = json.loads(example_json)
+        assert [example[f"c{i}"]["score"] for i in range(3)] == ["no", "yes", "no"]
+
+    @pytest.mark.parametrize(
+        "output_format",
+        [
+            Numeric(min=2, max=10),
+            Numeric(min=1e308, max=1.1e308),
+            Likert(points=7),
+            Rubric(levels=("a", "b", "c")),
+        ],
+    )
+    def test_batched_example_scores_are_valid_for_their_format(self, output_format):
+        criteria = [
+            Criterion(description=str(i), name=f"c{i}", output_format=output_format)
+            for i in range(3)
+        ]
+        example_json = _build_criteria_block(criteria).rsplit("Example:\n", 1)[-1]
+        example = json.loads(example_json)
+        normalized = [
+            output_format.normalize(example[f"c{i}"]["score"]) for i in range(3)
+        ]
+        assert normalized == pytest.approx([0.0, 0.5, 1.0])
 
 
 def _blocks_text(blocks):
@@ -186,6 +242,36 @@ class TestBuildUserContent:
         result = _build_user_content([str(f)])
         assert "[skipped: file too large]" in _blocks_text(result)
 
+    def test_unreadable_document_becomes_placeholder(self, tmp_path):
+        pytest.importorskip("markitdown")
+        (tmp_path / "empty.docx").write_bytes(b"")
+        (tmp_path / "notes.txt").write_text("sibling still read")
+        text = _blocks_text(_build_user_content([str(tmp_path)]))
+        assert (
+            "--- " + str(tmp_path / "empty.docx") + " ---\n[unreadable document]"
+            in text
+        )
+        assert "sibling still read" in text
+
+    def test_missing_converter_dependency_raises(self, tmp_path):
+        markitdown = pytest.importorskip("markitdown")
+        from markitdown._exceptions import FailedConversionAttempt
+
+        missing = markitdown.MissingDependencyException("docx needs mammoth")
+        wrapped = markitdown.FileConversionException(
+            attempts=[
+                FailedConversionAttempt(
+                    converter=object(), exc_info=(type(missing), missing, None)
+                )
+            ]
+        )
+        (tmp_path / "report.docx").write_bytes(b"")
+        with (
+            patch.object(markitdown.MarkItDown, "convert", side_effect=wrapped),
+            pytest.raises(markitdown.FileConversionException),
+        ):
+            _build_user_content([str(tmp_path / "report.docx")])
+
 
 class TestParseJudgeResponse:
     def test_parse_json_bare(self):
@@ -248,6 +334,76 @@ class TestParseJudgeResponse:
         text = '{"cov": {"score": 50, "reasoning": "half"}}'
         scores = parse_judge_response(text, criteria, None)
         assert scores[0].value == pytest.approx(0.5)
+
+    @pytest.mark.parametrize(
+        "output_format, raw",
+        [
+            (Binary(), "maybe"),
+            (Binary(), True),
+            (Likert(), 3.5),
+            (Likert(), "3"),
+            (Rubric(levels=("none", "some", "all")), 1.5),
+            (Rubric(levels=("none", "some", "all")), True),
+            (Numeric(), True),
+            (Numeric(), "0.5"),
+        ],
+    )
+    def test_parse_refuses_a_score_off_its_schema(self, output_format, raw):
+        criteria = [Criterion(description="q", name="q", output_format=output_format)]
+        text = json.dumps({"q": {"score": raw, "reasoning": "r"}})
+        with pytest.raises(ValueError, match="does not match its schema"):
+            parse_judge_response(text, criteria, None)
+
+    @pytest.mark.parametrize(
+        "output_format, raw, expected",
+        [
+            (Likert(), 3.0, 0.5),
+            (Rubric(levels=("none", "some", "all")), 2.0, 1.0),
+            (Numeric(), 1, 1.0),
+        ],
+    )
+    def test_parse_accepts_an_integral_number(self, output_format, raw, expected):
+        criteria = [Criterion(description="q", name="q", output_format=output_format)]
+        text = json.dumps({"q": {"score": raw, "reasoning": "r"}})
+        assert parse_judge_response(text, criteria, None)[0].value == expected
+
+    @pytest.mark.parametrize(
+        "enum, raw, ok",
+        [
+            ([0, 1], 1, True),
+            ([0, 1], 1.0, True),
+            ([0, 1], True, False),
+            ([0, 1], "1", False),
+            (["PASS", "FAIL"], "PASS", True),
+            (["PASS", "FAIL"], "pass", False),
+            ([{"score": 1}], {"score": 1.0}, True),
+            ([{"score": 1}], {"score": True}, False),
+            ([[1, 0]], [True, False], False),
+        ],
+    )
+    def test_parse_checks_a_custom_enum_exactly(self, enum, raw, ok):
+        class Custom:
+            def normalize(self, raw):
+                return 1.0
+
+            def prompt_fragment(self):
+                return "a value"
+
+            def json_schema(self):
+                return {"enum": enum}
+
+        criteria = [Criterion(description="q", name="q", output_format=Custom())]
+        text = json.dumps({"q": {"score": raw, "reasoning": "r"}})
+        if ok:
+            assert parse_judge_response(text, criteria, None)[0].value == 1.0
+        else:
+            with pytest.raises(ValueError, match="does not match its schema"):
+                parse_judge_response(text, criteria, None)
+
+    def test_parse_accepts_a_binary_answer_in_any_case(self):
+        criteria = [Criterion(description="q", name="q")]
+        text = '{"q": {"score": " Yes", "reasoning": "r"}}'
+        assert parse_judge_response(text, criteria, None)[0].value == 1.0
 
     def test_parse_extra_text_around_json(self):
         """JSON extracted from surrounding text."""
@@ -842,20 +998,6 @@ class TestLLMJudgeTransportRetry:
 
         assert result.scores[0].value == 1.0
         assert completion.call_count == 2
-
-    async def test_chunk_acknowledgements_retry_transport_errors(
-        self, llm_response, tmp_path, no_backoff
-    ):
-        trajectory = _make_trajectory_file(tmp_path, 3)
-        replies = [llm_response("ack"), llm_response("ack")]
-        final = llm_response('{"c": {"score": "yes", "reasoning": "ok"}}')
-        completion = AsyncMock(side_effect=[_transport_error(), *replies, final])
-        judge = LLMJudge(atif_trajectory=str(trajectory), chunk_count=3, timeout=5)
-        with patch("rewardkit.judges.litellm.acompletion", completion):
-            result = await arun_llm(judge, [Criterion(description="t", name="c")])
-
-        assert result.scores[0].value == 1.0
-        assert completion.call_count == 4
 
     async def test_exhausted_transport_retries_propagate_last_error(self, no_backoff):
         errors = [_transport_error() for _ in range(3)]
@@ -1455,12 +1597,35 @@ class TestLLMJudgeStructuredOutput:
         assert "reasoning" in rf["json_schema"]["schema"]["properties"]
         assert "correct" not in rf["json_schema"]["schema"]["properties"]
 
+    @patch("rewardkit.judges.litellm")
+    async def test_json_object_response_format(self, mock_litellm, llm_response):
+        mock_litellm.acompletion = AsyncMock(
+            return_value=llm_response('{"score": "yes", "reasoning": "ok"}')
+        )
+        criteria = [Criterion(description="Is it correct?", name="correct")]
+        result = await arun_llm(LLMJudge(response_format="json-object"), criteria)
+
+        assert result.scores[0].value == 1.0
+        call_kwargs = mock_litellm.acompletion.call_args[1]
+        assert call_kwargs["response_format"] == {"type": "json_object"}
+
+    @patch("rewardkit.judges.litellm")
+    async def test_none_omits_response_format(self, mock_litellm, llm_response):
+        mock_litellm.acompletion = AsyncMock(
+            return_value=llm_response('{"score": "yes", "reasoning": "ok"}')
+        )
+        criteria = [Criterion(description="Is it correct?", name="correct")]
+        result = await arun_llm(LLMJudge(response_format="none"), criteria)
+
+        assert result.scores[0].value == 1.0
+        assert "response_format" not in mock_litellm.acompletion.call_args[1]
+
 
 class TestJudgeRetry:
     @pytest.mark.parametrize("mode", ["batched", "individual"])
-    @pytest.mark.parametrize("raw", ["NaN", '"NaN"', "1e309"])
+    @pytest.mark.parametrize("raw", ["NaN", '"NaN"', "1e309", "7"])
     @patch("rewardkit.judges.litellm")
-    async def test_arun_llm_retries_nonfinite_score(
+    async def test_arun_llm_retries_invalid_score(
         self, mock_litellm, mode, raw, llm_response
     ):
         responses = []
@@ -1488,10 +1653,13 @@ class TestJudgeRetry:
         assert result.scores[0].value == 0.25
         assert result.scores[0].raw == 2
 
+    @pytest.mark.parametrize("bad_content", ['{"correct": "yes"}', None])
     @patch("rewardkit.judges.litellm")
-    async def test_arun_llm_retries_on_bad_schema(self, mock_litellm, llm_response):
-        """arun_llm retries when response doesn't match schema."""
-        bad_response = llm_response('{"correct": "yes"}')
+    async def test_arun_llm_retries_on_invalid_response(
+        self, mock_litellm, llm_response, bad_content
+    ):
+        """arun_llm retries when the response has no content or doesn't match schema."""
+        bad_response = llm_response(bad_content)
         good_response = llm_response('{"correct": {"score": "yes", "reasoning": "ok"}}')
         mock_litellm.acompletion = AsyncMock(side_effect=[bad_response, good_response])
 
@@ -1501,15 +1669,33 @@ class TestJudgeRetry:
         assert mock_litellm.acompletion.call_count == 2
 
     @patch("rewardkit.judges.litellm")
-    async def test_arun_llm_raises_after_max_retries(self, mock_litellm, llm_response):
-        """arun_llm raises ValueError after exhausting retries."""
+    async def test_arun_llm_retries_a_score_off_its_schema(
+        self, mock_litellm, llm_response
+    ):
+        bad_response = llm_response('{"score": 1.5, "reasoning": "between"}')
+        good_response = llm_response('{"score": 2, "reasoning": "ok"}')
+        mock_litellm.acompletion = AsyncMock(side_effect=[bad_response, good_response])
+
+        criteria = [
+            Criterion(description="q", output_format=Rubric(levels=("a", "b", "c")))
+        ]
+        scores = (await arun_llm(LLMJudge(), criteria)).scores
+        assert scores[0].value == 1.0
+        assert mock_litellm.acompletion.call_count == 2
+
+    @patch("rewardkit.judges.litellm")
+    async def test_arun_llm_errors_after_max_retries(self, mock_litellm, llm_response):
         bad_response = llm_response('{"correct": "yes"}')
         mock_litellm.acompletion = AsyncMock(return_value=bad_response)
 
         criteria = [Criterion(description="test", name="correct")]
-        with pytest.raises(ValueError, match="correct"):
-            await arun_llm(LLMJudge(), criteria)
+        result = await arun_llm(LLMJudge(), criteria)
         assert mock_litellm.acompletion.call_count == 3
+        (score,) = result.scores
+        assert score.value == 0.0
+        assert "invalid after 3 attempts" in (score.error or "")
+        assert "correct" in (score.error or "")
+        assert result.warnings[-1].endswith("recording affected criteria as 0.0")
 
     async def test_agent_error_retries_then_succeeds(self, agent_backend):
         agent_backend.run.side_effect = [
@@ -1531,16 +1717,18 @@ class TestJudgeRetry:
         assert result.judge_logs == ["failed.jsonl", "ok.jsonl"]
         assert result.warnings == ["first attempt failed"]
 
-    async def test_agent_error_exhausts_retries_then_raises(self, agent_backend):
+    async def test_agent_error_exhausts_retries_then_errors(self, agent_backend):
         from rewardkit.judges import _MAX_JUDGE_RETRIES
 
-        error = ValueError("exited with code 1")
-        agent_backend.run.return_value = AgentAttempt(error=error)
-        with pytest.raises(ValueError, match="exited with code 1") as exc:
-            await arun_agent(AgentJudge(), [Criterion(description="test")])
-        assert exc.value.__cause__ is error
+        agent_backend.run.return_value = AgentAttempt(
+            error=ValueError("exited with code 1")
+        )
+        result = await arun_agent(AgentJudge(), [Criterion(description="test")])
         assert agent_backend.run.await_count == _MAX_JUDGE_RETRIES
         agent_backend.__aexit__.assert_awaited_once()
+        (score,) = result.scores
+        assert score.value == 0.0
+        assert score.error == "claude-code judge failed: exited with code 1"
 
 
 def _llm_response(
@@ -2145,6 +2333,22 @@ class TestJevJudge:
         assert result.scores[0].value == pytest.approx(0.75)
         assert result.scores[0].raw == 1.5
 
+    async def test_out_of_range_rubric_score_is_errored(self, jev_client):
+        jev_client({"r": _rubric_answer(3.0, 3)})
+        result = await arun_jev(
+            JevJudge(),
+            [
+                Criterion(
+                    description="d",
+                    name="r",
+                    output_format=Rubric(levels=("a", "b", "c")),
+                )
+            ],
+        )
+        (score,) = result.scores
+        assert score.value == 0.0
+        assert "between 0 and 2" in (score.error or "")
+
     async def test_batched_request_shape(self, jev_client, tmp_path):
         answer = tmp_path / "answer.txt"
         answer.write_text("the answer")
@@ -2233,10 +2437,12 @@ class TestJevJudge:
         with pytest.raises(TypeSafeError, match="bad key"):
             await arun_jev(JevJudge(), [Criterion(description="d", name="ok")])
 
-    async def test_missing_answer_raises(self, jev_client):
+    async def test_missing_answer_is_errored(self, jev_client):
         jev_client({})
-        with pytest.raises(ValueError, match="no answer"):
-            await arun_jev(JevJudge(), [Criterion(description="d", name="ok")])
+        result = await arun_jev(JevJudge(), [Criterion(description="d", name="ok")])
+        (score,) = result.scores
+        assert score.value == 0.0
+        assert "no answer" in (score.error or "")
 
     async def test_missing_sdk_hint(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "typesafe_sdk", None)
@@ -2292,251 +2498,3 @@ class TestRubricWithLLMParser:
         )
         block = _build_criteria_block([c])
         assert "0 = bad" in block and "1 = good" in block
-
-
-# ===================================================================
-# Chunked trajectory delivery
-# ===================================================================
-
-
-def _make_trajectory_file(tmp_path, n_steps: int):
-    f = tmp_path / "trajectory.json"
-    f.write_text(
-        json.dumps(
-            {
-                "schema_version": "ATIF-v1.6",
-                "session_id": "test-session",
-                "agent": {"name": "test-agent", "version": "1.0"},
-                "steps": [
-                    {"step_id": i, "source": "agent", "message": f"step {i}"}
-                    for i in range(1, n_steps + 1)
-                ],
-            }
-        )
-    )
-    return f
-
-
-def _mock_response(content: str) -> MagicMock:
-    resp = MagicMock()
-    resp.choices = [MagicMock(message=MagicMock(content=content))]
-    return resp
-
-
-def _configure_litellm_mock(mock_litellm) -> None:
-    """Give the mocked `rewardkit.judges.litellm` real-ish token-budget answers."""
-    mock_litellm.get_model_info.return_value = {"max_input_tokens": 200_000}
-    mock_litellm.encode.side_effect = lambda model, text: [0] * len(text.split())
-
-
-class TestChunkedMode:
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_call_count_matches_chunk_count(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        result = asyncio.run(arun_llm(judge, criteria))
-
-        assert mock_litellm.acompletion.call_count == 3
-        assert result.scores[0].value == 1.0
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_response_format_only_on_last_call(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        asyncio.run(arun_llm(judge, criteria))
-
-        calls = mock_litellm.acompletion.call_args_list
-        assert "response_format" not in calls[0].kwargs
-        assert "response_format" not in calls[1].kwargs
-        assert "response_format" in calls[2].kwargs
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_marker_only_in_last_message(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        from rewardkit.judges import _CHUNKS_DONE_MARKER
-
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        asyncio.run(arun_llm(judge, criteria))
-
-        final_messages = mock_litellm.acompletion.call_args_list[2].kwargs["messages"]
-        user_messages = [m for m in final_messages if m["role"] == "user"]
-        for i, m in enumerate(user_messages):
-            text = _blocks_text(m["content"])
-            if i == len(user_messages) - 1:
-                assert _CHUNKS_DONE_MARKER in text
-            else:
-                assert _CHUNKS_DONE_MARKER not in text
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_instruction_in_every_system_message(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        from rewardkit.judges import _CHUNKED_TRAJECTORY_INSTRUCTION
-
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        asyncio.run(arun_llm(judge, criteria))
-
-        for call in mock_litellm.acompletion.call_args_list:
-            system_msg = call.kwargs["messages"][0]["content"]
-            assert _CHUNKED_TRAJECTORY_INSTRUCTION in system_msg
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_scores_parsed_from_last_response_only(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "no", "reasoning": "final"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        result = asyncio.run(arun_llm(judge, criteria))
-        scores, raw = result.scores, result.output
-
-        assert scores[0].value == 0.0
-        assert scores[0].reasoning == "final"
-        assert raw == '{"c": {"score": "no", "reasoning": "final"}}'
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_final_messages_alternate_strictly(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        asyncio.run(arun_llm(judge, criteria))
-
-        final_messages = mock_litellm.acompletion.call_args_list[2].kwargs["messages"]
-        roles = [m["role"] for m in final_messages]
-        assert roles == ["system", "user", "assistant", "user", "assistant", "user"]
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_ack_calls_use_max_tokens_64(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3)
-        asyncio.run(arun_llm(judge, criteria))
-
-        calls = mock_litellm.acompletion.call_args_list
-        assert calls[0].kwargs["max_tokens"] == 64
-        assert calls[1].kwargs["max_tokens"] == 64
-        assert "max_tokens" not in calls[2].kwargs
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_timeout_passed_on_every_call(self, mock_litellm, tmp_path):
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            side_effect=[
-                _mock_response("ack1"),
-                _mock_response("ack2"),
-                _mock_response('{"c": {"score": "yes", "reasoning": "ok"}}'),
-            ]
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj), chunk_count=3, timeout=123)
-        asyncio.run(arun_llm(judge, criteria))
-
-        for call in mock_litellm.acompletion.call_args_list:
-            assert call.kwargs["timeout"] == 123
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_chunk_count_without_trajectory_is_single_call(self, mock_litellm):
-        _configure_litellm_mock(mock_litellm)
-        """chunk_count is ignored when there's no trajectory to chunk."""
-        mock_litellm.acompletion = AsyncMock(
-            return_value=_mock_response('{"c": {"score": "yes", "reasoning": "ok"}}')
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(chunk_count=3)
-        asyncio.run(arun_llm(judge, criteria))
-
-        assert mock_litellm.acompletion.call_count == 1
-
-    @pytest.mark.unit
-    @patch("rewardkit.judges.litellm")
-    def test_chunk_count_none_with_trajectory_is_single_call(
-        self, mock_litellm, tmp_path
-    ):
-        """Regression: default chunk_count=None keeps today's single-call path."""
-        _configure_litellm_mock(mock_litellm)
-        traj = _make_trajectory_file(tmp_path, 3)
-        mock_litellm.acompletion = AsyncMock(
-            return_value=_mock_response('{"c": {"score": "yes", "reasoning": "ok"}}')
-        )
-
-        criteria = [Criterion(description="test", name="c")]
-        judge = LLMJudge(atif_trajectory=str(traj))
-        asyncio.run(arun_llm(judge, criteria))
-
-        assert mock_litellm.acompletion.call_count == 1

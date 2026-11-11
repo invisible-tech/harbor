@@ -28,20 +28,19 @@ from rewardkit.agents import (
 )
 from rewardkit.models import (
     AgentJudge,
+    Binary,
     Criterion,
     JevJudge,
     JudgeResult,
     JudgeUsage,
+    Likert,
     LLMJudge,
+    Numeric,
     Rubric,
     Score,
     TokenUsage,
 )
-from rewardkit.trajectory import (
-    _chunk_trajectory_content,
-    _count_image_tokens,
-    _format_trajectory_content,
-)
+from rewardkit.trajectory import _count_image_tokens, _format_trajectory_content
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +109,27 @@ def _load_template(name: str) -> str:
     return _TEMPLATES[name]
 
 
+def _example_scores(fmt: Any) -> list[Any]:
+    """Low, middle and high scores for ``fmt``, in its own response type."""
+    if isinstance(fmt, Binary):
+        return ["no", "yes"]
+    if isinstance(fmt, Numeric):
+        return [fmt.min, fmt.min + (fmt.max - fmt.min) / 2, fmt.max]
+    if isinstance(fmt, Likert):
+        return [1, (1 + fmt.points) // 2, fmt.points]
+    if isinstance(fmt, Rubric):
+        top = len(fmt.levels) - 1
+        return [0, top // 2, top]
+    return [fmt.json_schema().get("enum", [1])[0]]
+
+
+def _example_entry(c: Criterion, index: int = 0) -> dict[str, Any]:
+    """An example entry whose score rotates through low, middle and high values
+    by criterion position, so the example does not suggest any particular score."""
+    scores = _example_scores(c.output_format)
+    return {"score": scores[index % len(scores)], "reasoning": "..."}
+
+
 def _build_criteria_block(criteria: list[Criterion]) -> str:
     lines: list[str] = []
     for c in criteria:
@@ -118,9 +138,9 @@ def _build_criteria_block(criteria: list[Criterion]) -> str:
     lines.append("")
     lines.append("Respond with a JSON object. Example:")
     if len(criteria) == 1:
-        example: dict[str, Any] = {"score": 1, "reasoning": "..."}
+        example: dict[str, Any] = _example_entry(criteria[0])
     else:
-        example = {c.name: {"score": 1, "reasoning": "..."} for c in criteria}
+        example = {c.name: _example_entry(c, i) for i, c in enumerate(criteria)}
     lines.append(json.dumps(example, indent=2))
     return "\n".join(lines)
 
@@ -191,15 +211,29 @@ _DOCUMENT_EXTENSIONS = frozenset(
 ContentBlock = dict[str, Any]
 
 
-def _convert_with_markitdown(p: Path) -> str:
+def _convert_with_markitdown(p: Path) -> str | None:
     try:
-        from markitdown import MarkItDown
+        from markitdown import (
+            FileConversionException,
+            MarkItDown,
+            MarkItDownException,
+            MissingDependencyException,
+        )
     except ImportError as e:
         raise ImportError(
             f"Reading {p.suffix} files requires the 'documents' extra. "
             f"Install with: uv add harbor-rewardkit[documents]"
         ) from e
-    return MarkItDown().convert(str(p)).text_content
+    try:
+        return MarkItDown().convert(str(p)).text_content
+    except (MarkItDownException, OSError) as e:
+        if isinstance(e, FileConversionException) and any(
+            a.exc_info and isinstance(a.exc_info[1], MissingDependencyException)
+            for a in e.attempts or []
+        ):
+            raise
+        logger.warning("Could not convert %s, treating it as unreadable: %s", p, e)
+        return None
 
 
 def _read_file_blocks(p: Path, label: str) -> list[ContentBlock]:
@@ -231,6 +265,8 @@ def _read_file_blocks(p: Path, label: str) -> list[ContentBlock]:
 
     if suffix in _DOCUMENT_EXTENSIONS:
         text = _convert_with_markitdown(p)
+        if text is None:
+            return [{"type": "text", "text": f"--- {label} ---\n[unreadable document]"}]
         return [{"type": "text", "text": f"--- {label} ---\n{text}"}]
 
     # Try reading as text: binary files raise UnicodeDecodeError and are skipped.
@@ -327,13 +363,40 @@ def _has_media(blocks: list[ContentBlock]) -> bool:
 
 _MAX_JUDGE_RETRIES = 3
 
-_CHUNKS_DONE_MARKER = "<<ALL_CHUNKS_SENT>>"
-_CHUNKED_TRAJECTORY_INSTRUCTION = (
-    "You will receive the trajectory as multiple sequential messages. Read and "
-    "hold each one in context as it arrives, but do not produce your evaluation "
-    f"yet. Only once you see the message containing {_CHUNKS_DONE_MARKER} should "
-    "you respond with the final JSON verdict covering the complete trajectory."
-)
+
+def _same_json_value(a: Any, b: Any) -> bool:
+    """Compare like JSON Schema: ``1`` equals ``1.0``, but ``True`` does not equal ``1``."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same_json_value(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(map(_same_json_value, a, b))
+    return type(a) is type(b) and a == b
+
+
+def _check_score_schema(name: str, c: Criterion, raw: Any) -> None:
+    """Raise if the score doesn't fit the criterion's schema, so the reply is retried."""
+    schema = c.output_format.json_schema()
+    value = raw
+    if isinstance(c.output_format, Binary) and isinstance(raw, str):
+        value = raw.strip().lower()
+    if "enum" in schema:
+        ok = any(_same_json_value(value, m) for m in schema["enum"])
+    elif isinstance(value, bool):
+        ok = schema.get("type") not in ("integer", "number")
+    elif schema.get("type") == "integer":
+        ok = isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+    elif schema.get("type") == "number":
+        ok = isinstance(value, (int, float))
+    else:
+        ok = True
+    if not ok:
+        raise ValueError(
+            f"Criterion {name!r}: score {raw!r} does not match its schema {schema}"
+        )
 
 
 def parse_judge_response(
@@ -368,6 +431,7 @@ def parse_judge_response(
                 f"got {type(entry).__name__}: {str(entry)[:100]}"
             )
         raw_score = entry["score"]
+        _check_score_schema(cname, c, raw_score)
         reasoning = entry.get("reasoning", "")
         value = c.output_format.normalize(raw_score)
         if c.negate:
@@ -389,26 +453,37 @@ def parse_judge_response(
     return scores
 
 
-def _timeout_scores(
+def _errored_score(name: str, c: Criterion, weight: float, error: str) -> Score:
+    return Score(
+        name=name,
+        value=0.0,
+        raw=None,
+        weight=weight,
+        error=error,
+        description=c.description,
+        id=c.id,
+        negate=c.negate,
+        optional=c.optional,
+    )
+
+
+def _failed_result(
     criteria: list[Criterion],
     weights: list[float] | None,
-    timeout: int,
-) -> list[Score]:
-    """Errored 0.0 scores for a judge call that timed out."""
-    return [
-        Score(
-            name=c.name or f"criterion_{i}",
-            value=0.0,
-            raw=None,
-            weight=weights[i] if weights else 1.0,
-            error=f"judge timed out after {timeout}s",
-            description=c.description,
-            id=c.id,
-            negate=c.negate,
-            optional=c.optional,
+    error: str,
+    warn_list: list[str],
+    usages: list[JudgeUsage],
+    output: str = "",
+    judge_logs: list[str] | None = None,
+) -> JudgeResult:
+    warn_list.append(f"{error}; recording affected criteria as 0.0")
+    scores = [
+        _errored_score(
+            c.name or f"criterion_{i}", c, weights[i] if weights else 1.0, error
         )
         for i, c in enumerate(criteria)
     ]
+    return JudgeResult(scores, output, warn_list, merge_usage(usages), judge_logs or [])
 
 
 _GUARD = Criterion(
@@ -588,16 +663,12 @@ async def _arun_llm_call(
     media_semaphore: asyncio.Semaphore | None,
 ) -> JudgeResult:
     warn_list: list[str] = []
-    chunked = bool(judge.chunk_count and judge.atif_trajectory)
-    chunks: list[list[ContentBlock]] = []
     prompt = build_prompt(
         criteria,
         template=system_prompt,
         kind="llm_trajectory" if judge.atif_trajectory else "llm",
         guard=judge.guard != "off",
     )
-    if chunked:
-        prompt = f"{prompt}\n\n{_CHUNKED_TRAJECTORY_INSTRUCTION}"
 
     user_blocks = _build_judge_blocks(
         files, judge.reference, guard=judge.guard != "off"
@@ -624,94 +695,41 @@ async def _arun_llm_call(
                 f"limit={max_input_tokens})."
             )
 
-        trajectory_kwargs: dict[str, Any] = {
-            "max_tokens": available_tokens,
-            "model": judge.model,
-            "warnings_out": warn_list,
-            "media_cache": trajectory_media_cache,
-        }
-        if chunked:
-            # Each chunk is fenced on its own so no chunk can close another's fence.
-            chunks = _chunk_trajectory_content(
-                judge.atif_trajectory,
-                chunk_count=judge.chunk_count,
-                **trajectory_kwargs,
-            )
-            if judge.guard != "off":
-                chunks = [_fence(chunk) for chunk in chunks]
-        else:
-            trajectory_blocks = _format_trajectory_content(
-                judge.atif_trajectory, **trajectory_kwargs
-            )
-            if judge.guard != "off":
-                trajectory_blocks = _fence(trajectory_blocks)
-            user_blocks.extend(trajectory_blocks)
+        trajectory_blocks = _format_trajectory_content(
+            judge.atif_trajectory,
+            max_tokens=available_tokens,
+            model=judge.model,
+            warnings_out=warn_list,
+            media_cache=trajectory_media_cache,
+        )
+        if judge.guard != "off":
+            trajectory_blocks = _fence(trajectory_blocks)
+        user_blocks.extend(trajectory_blocks)
 
-    chunk_messages: list[list[ContentBlock]] = []
-    if chunked:
-        # The first chunk carries the file and reference blocks; the last carries the
-        # done marker.
-        chunk_messages = [
-            list(user_blocks) * (i == 0) + chunk for i, chunk in enumerate(chunks)
-        ]
-        chunk_messages[-1].append({"type": "text", "text": _CHUNKS_DONE_MARKER})
-        all_blocks = [b for m in chunk_messages for b in m]
-    else:
-        all_blocks = user_blocks
-    _validate_media_support(judge.model, all_blocks)
+    _validate_media_support(judge.model, user_blocks)
     messages: list[dict[str, Any]] = [{"role": "system", "content": prompt}]
-    usages: list[JudgeUsage] = []
-    if chunked:
-        # Every chunk but the last gets a short acknowledgement turn, with no
-        # response_format, so the verdict comes only after the full trajectory.
-        try:
-            for message_blocks in chunk_messages[:-1]:
-                messages.append({"role": "user", "content": message_blocks})
-                ack = await _acompletion_with_retry(
-                    {
-                        "model": judge.model,
-                        "messages": messages,
-                        "reasoning_effort": judge.reasoning_effort,
-                        "max_tokens": 64,
-                        **_resolve_credentials(judge.model),
-                    },
-                    judge.timeout,
-                )
-                usages.append(_llm_usage(ack, judge.model))
-                messages.append(
-                    {"role": "assistant", "content": ack.choices[0].message.content}
-                )
-        except litellm.Timeout:
-            warn_list.append(
-                f"judge timed out after {judge.timeout}s; recording affected "
-                "criteria as 0.0"
-            )
-            return JudgeResult(
-                _timeout_scores(criteria, weights, judge.timeout),
-                "",
-                warn_list,
-                merge_usage(usages),
-            )
-        messages.append({"role": "user", "content": chunk_messages[-1]})
-    elif user_blocks:
+    if user_blocks:
         messages.append({"role": "user", "content": user_blocks})
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "judge_response",
-            "schema": _build_response_schema(criteria),
-            "strict": True,
-        },
-    }
-    request_has_media = _has_media(all_blocks)
+    request_has_media = _has_media(user_blocks)
+    usages: list[JudgeUsage] = []
     completion_kwargs: dict[str, Any] = {
         "model": judge.model,
         "messages": messages,
-        "response_format": response_format,
         "timeout": judge.timeout,
         "reasoning_effort": judge.reasoning_effort,
         **_resolve_credentials(judge.model),
     }
+    if judge.response_format == "json-schema":
+        completion_kwargs["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "judge_response",
+                "schema": _build_response_schema(criteria),
+                "strict": True,
+            },
+        }
+    elif judge.response_format == "json-object":
+        completion_kwargs["response_format"] = {"type": "json_object"}
     for attempt in range(_MAX_JUDGE_RETRIES):
         try:
             if request_has_media and media_semaphore is not None:
@@ -722,24 +740,29 @@ async def _arun_llm_call(
             else:
                 resp = await _acompletion_with_retry(completion_kwargs, judge.timeout)
         except litellm.Timeout:
-            warn_list.append(
-                f"judge timed out after {judge.timeout}s; recording affected "
-                "criteria as 0.0"
-            )
-            return JudgeResult(
-                _timeout_scores(criteria, weights, judge.timeout),
-                "",
+            return _failed_result(
+                criteria,
+                weights,
+                f"judge timed out after {judge.timeout}s",
                 warn_list,
-                merge_usage(usages),
+                usages,
             )
         usages.append(_llm_usage(resp, judge.model))
-        raw_output = resp.choices[0].message.content
+        # content is None when the model replies without text.
+        raw_output = resp.choices[0].message.content or ""
         try:
             scores = parse_judge_response(raw_output, criteria, weights)
             return JudgeResult(scores, raw_output, warn_list, merge_usage(usages))
-        except ValueError:
+        except ValueError as e:
             if attempt == _MAX_JUDGE_RETRIES - 1:
-                raise
+                return _failed_result(
+                    criteria,
+                    weights,
+                    f"judge response invalid after {_MAX_JUDGE_RETRIES} attempts: {e}",
+                    warn_list,
+                    usages,
+                    output=raw_output,
+                )
             logger.debug(
                 "Judge response did not match schema, retrying (%d/%d)",
                 attempt + 1,
@@ -814,25 +837,29 @@ async def _arun_jev_call(
             _text_from_blocks(blocks), questions, model=judge.model
         )
     except typesafe_sdk.TypeSafeAPITimeoutError:
-        warning = (
-            f"judge timed out after {judge.timeout}s; recording affected "
-            "criteria as 0.0"
-        )
-        return JudgeResult(
-            _timeout_scores(criteria, weights, judge.timeout), "", [warning]
+        return _failed_result(
+            criteria, weights, f"judge timed out after {judge.timeout}s", [], []
         )
 
     scores: list[Score] = []
     for i, (name, c) in enumerate(zip(questions, criteria)):
         answer = response.answers.get(name)
+        weight = weights[i] if weights else 1.0
         if isinstance(answer, typesafe_sdk.NoulAnswer):
             raw = answer.noul
             value = 1.0 if raw >= 0.5 else 0.0
         elif isinstance(answer, typesafe_sdk.ScoreAnswer):
             raw = answer.score
-            value = c.output_format.normalize(raw)
+            try:
+                value = c.output_format.normalize(raw)
+            except ValueError as e:
+                error = f"Criterion {name!r}: invalid JEV score: {e}"
+                scores.append(_errored_score(name, c, weight, error))
+                continue
         else:
-            raise ValueError(f"Criterion {name!r}: no answer in the JEV response")
+            error = f"Criterion {name!r}: no answer in the JEV response"
+            scores.append(_errored_score(name, c, weight, error))
+            continue
         if c.negate:
             value = 1.0 - value
         scores.append(
@@ -840,7 +867,7 @@ async def _arun_jev_call(
                 name=name,
                 value=value,
                 raw=raw,
-                weight=weights[i] if weights else 1.0,
+                weight=weight,
                 description=c.description,
                 id=c.id,
                 negate=c.negate,
@@ -956,21 +983,24 @@ async def _arun_agent_call(
         judge_logs.extend(attempt.logs)
         warn_list.extend(attempt.warnings)
         if attempt.timed_out:
-            warn_list.append(
-                f"judge timed out after {judge.timeout}s; recording affected "
-                "criteria as 0.0"
-            )
-            return JudgeResult(
-                _timeout_scores(criteria, weights, judge.timeout),
-                "",
+            return _failed_result(
+                criteria,
+                weights,
+                f"judge timed out after {judge.timeout}s",
                 warn_list,
-                merge_usage(usages),
-                judge_logs,
+                usages,
+                judge_logs=judge_logs,
             )
         if attempt.error is not None:
             if attempt_number == _MAX_JUDGE_RETRIES - 1:
-                raise ValueError(f"{judge.agent} judge failed: {attempt.error}") from (
-                    attempt.error
+                return _failed_result(
+                    criteria,
+                    weights,
+                    f"{judge.agent} judge failed: {attempt.error}",
+                    warn_list,
+                    usages,
+                    output=attempt.output,
+                    judge_logs=judge_logs,
                 )
             logger.debug(
                 "%s judge failed, retrying (%d/%d)",
@@ -988,9 +1018,17 @@ async def _arun_agent_call(
                 merge_usage(usages),
                 judge_logs,
             )
-        except ValueError:
+        except ValueError as e:
             if attempt_number == _MAX_JUDGE_RETRIES - 1:
-                raise
+                return _failed_result(
+                    criteria,
+                    weights,
+                    f"judge response invalid after {_MAX_JUDGE_RETRIES} attempts: {e}",
+                    warn_list,
+                    usages,
+                    output=attempt.output,
+                    judge_logs=judge_logs,
+                )
             logger.debug(
                 "Agent judge response did not match schema, retrying (%d/%d)",
                 attempt_number + 1,
