@@ -118,7 +118,7 @@ def test_only_a_usable_stored_key_disables_default_token_command(
 ) -> None:
     with tempfile.TemporaryDirectory() as home:
         _write_credentials(home, content)
-        with patched_supabase_env({"HOME": home}) as reloaded:
+        with patched_supabase_env({"HOME": home, "USERPROFILE": home}) as reloaded:
             assert reloaded.ACCESS_TOKEN_COMMAND == expected
 
 
