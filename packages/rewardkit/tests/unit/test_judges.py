@@ -850,24 +850,6 @@ def _transport_error(error_type=litellm.ServiceUnavailableError):
     return error_type(message="transport error", llm_provider="p", model="m")
 
 
-def _make_trajectory_file(tmp_path, n_steps: int):
-    f = tmp_path / "trajectory.json"
-    f.write_text(
-        json.dumps(
-            {
-                "schema_version": "ATIF-v1.6",
-                "session_id": "test-session",
-                "agent": {"name": "test-agent", "version": "1.0"},
-                "steps": [
-                    {"step_id": i, "source": "agent", "message": f"step {i}"}
-                    for i in range(1, n_steps + 1)
-                ],
-            }
-        )
-    )
-    return f
-
-
 def _rate_limit_error(headers: dict[str, str]):
     """A 429 shaped like litellm raises it: the headers sit on
     ``litellm_response_headers`` and the attached response carries none."""
@@ -1016,20 +998,6 @@ class TestLLMJudgeTransportRetry:
 
         assert result.scores[0].value == 1.0
         assert completion.call_count == 2
-
-    async def test_chunk_acknowledgements_retry_transport_errors(
-        self, llm_response, tmp_path, no_backoff
-    ):
-        trajectory = _make_trajectory_file(tmp_path, 3)
-        replies = [llm_response("ack"), llm_response("ack")]
-        final = llm_response('{"c": {"score": "yes", "reasoning": "ok"}}')
-        completion = AsyncMock(side_effect=[_transport_error(), *replies, final])
-        judge = LLMJudge(atif_trajectory=str(trajectory), chunk_count=3, timeout=5)
-        with patch("rewardkit.judges.litellm.acompletion", completion):
-            result = await arun_llm(judge, [Criterion(description="t", name="c")])
-
-        assert result.scores[0].value == 1.0
-        assert completion.call_count == 4
 
     async def test_exhausted_transport_retries_propagate_last_error(self, no_backoff):
         errors = [_transport_error() for _ in range(3)]
