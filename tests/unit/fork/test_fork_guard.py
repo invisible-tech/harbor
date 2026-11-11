@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 import harbor.auth.constants as auth_constants
@@ -6,7 +8,6 @@ import harbor.cli.hub as cli_hub
 import harbor.constants as constants
 import harbor.publisher.packager as packager
 import harbor.storage.resumable as resumable
-import rewardkit.judges as judges
 from harbor.agents.installed.claude_code import ClaudeCodeOptions
 
 pytestmark = pytest.mark.unit
@@ -45,7 +46,12 @@ def test_fork_cli_helpers_are_present() -> None:
     assert callable(cli_auth._token_mode_pointer)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="rewardkit imports POSIX-only modules"
+)
 def test_rewardkit_retry_helper_is_present() -> None:
+    import rewardkit.judges as judges
+
     assert callable(judges._acompletion_with_retry)
 
 
