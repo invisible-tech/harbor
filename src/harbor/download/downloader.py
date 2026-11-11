@@ -122,7 +122,11 @@ class Downloader:
 
         job = await self.db.get_job(job_id)
         if job is None:
-            raise RuntimeError(f"Job {job_id} not found or not accessible.")
+            raise RuntimeError(
+                f"Job {job_id} has nothing to download: it is not visible to "
+                "this login, or it is a hosted job. Read a hosted job with "
+                "`harbor hub job status` and `harbor hub job trials`."
+            )
 
         job_name = job["job_name"]
         target = output_dir / job_name
@@ -217,9 +221,9 @@ class Downloader:
         archive_path = trial.get("archive_path")
         if not archive_path:
             raise RuntimeError(
-                f"Trial {trial_id} has no archive on record. It was likely "
-                "uploaded before trial archiving existed, or the upload was "
-                "interrupted."
+                f"Trial {trial_id} has no archive to download. Hosted trials "
+                "do not store an archive; use `--trajectory` once the trial "
+                "has finished."
             )
 
         trial_name = trial["trial_name"]

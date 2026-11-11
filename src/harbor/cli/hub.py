@@ -1195,7 +1195,11 @@ def download_trial_cmd(
 
         detail = await HubClient().get_trial_detail(parsed_id)
         if not detail.trajectory_path:
-            raise RuntimeError(f"Trial {parsed_id} does not have trajectory_path set.")
+            raise RuntimeError(
+                f"Trial {parsed_id} has no trajectory yet. The path is recorded "
+                "only after the episode succeeds or fails; retry once it has "
+                "finished."
+            )
 
         trial_name = detail.trial_name or parsed_id
         target = output_dir / trial_name / "trajectory.json"
