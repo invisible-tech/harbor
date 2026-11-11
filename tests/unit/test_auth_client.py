@@ -131,6 +131,19 @@ async def test_refresh_failure_surfaces_clear_error(monkeypatch, tmp_path):
         await tokens.get_access_token()
 
 
+async def test_failed_command_error_keeps_full_stderr(monkeypatch):
+    code = (
+        "import sys; "
+        "print('Reauthentication failed. Run: gcloud auth login', file=sys.stderr); "
+        "print('to select an already authenticated account to use.', file=sys.stderr); "
+        "sys.exit(1)"
+    )
+    monkeypatch.setattr(C, "ACCESS_TOKEN_COMMAND", _py(code))
+    with pytest.raises(AuthenticationError, match="gcloud auth login") as exc:
+        await tokens.get_access_token()
+    assert "already authenticated account" in str(exc.value)
+
+
 async def _no_sleep(_seconds: float) -> None:
     return None
 

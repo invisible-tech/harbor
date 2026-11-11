@@ -182,7 +182,7 @@ class TestDownloadJob:
     ) -> None:
         mock_downloader.db.get_job.return_value = None
 
-        with pytest.raises(RuntimeError, match="not found or not accessible"):
+        with pytest.raises(RuntimeError, match="nothing to download"):
             await mock_downloader.download_job(uuid4(), tmp_path)
 
         mock_downloader.storage.download_bytes.assert_not_awaited()
@@ -619,7 +619,7 @@ class TestDownloadTrial:
             "archive_path": None,
         }
 
-        with pytest.raises(RuntimeError, match="no archive on record"):
+        with pytest.raises(RuntimeError, match="Hosted trials"):
             await mock_downloader.download_trial(uuid4(), tmp_path)
 
     @pytest.mark.asyncio
@@ -643,3 +643,13 @@ class TestDownloadTrial:
 
         assert not (stale / "stale.txt").exists()
         assert (stale / "config.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_job_not_found_message_names_registry(
+    tmp_path: Path, mock_downloader: Downloader
+) -> None:
+    mock_downloader.db.get_job.return_value = None
+
+    with pytest.raises(RuntimeError, match="hosted job"):
+        await mock_downloader.download_job(uuid4(), tmp_path)

@@ -53,7 +53,7 @@ async def test_token_command_shlex_preserves_quoted_argument_with_spaces(
     assert await tokens.get_access_token() == "quoted-argument-token"
 
 
-async def test_nonzero_command_reports_only_last_stderr_line(monkeypatch):
+async def test_nonzero_command_reports_full_stderr(monkeypatch):
     code = "import sys; print('first diagnostic', file=sys.stderr); "
     code += "print('final diagnostic', file=sys.stderr); sys.exit(7)"
     monkeypatch.setattr(C, "ACCESS_TOKEN_COMMAND", _py(code))
@@ -61,8 +61,7 @@ async def test_nonzero_command_reports_only_last_stderr_line(monkeypatch):
     with pytest.raises(AuthenticationError) as exc_info:
         await tokens.get_access_token()
 
-    assert "exited 7: final diagnostic" in str(exc_info.value)
-    assert "first diagnostic" not in str(exc_info.value)
+    assert "exited 7: first diagnostic\nfinal diagnostic" in str(exc_info.value)
 
 
 async def test_resolve_bearer_uses_command_token_and_is_anonymous_without_credentials(

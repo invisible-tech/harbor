@@ -110,7 +110,7 @@ def test_hub_trial_download_trajectory_errors_without_trajectory_path(
 
     assert result.exit_code == 1
     storage.download_file.assert_not_awaited()
-    assert "trajectory_path set" in result.output
+    assert "no trajectory yet" in " ".join(result.output.split())
 
 
 EP_IDS = ["ep_01fa2afb1a9e", "ep_hub_0123456789abcdef0123456789abcdef"]

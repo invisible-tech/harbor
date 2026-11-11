@@ -181,9 +181,8 @@ def _run_token_command(cmd: str) -> str:
             "(interactive prompt? run it manually once)"
         ) from None
     if proc.returncode != 0:
-        lines = proc.stderr.strip().splitlines()
         raise AuthenticationError(
-            f"{prefix} exited {proc.returncode}: {lines[-1] if lines else ''}"
+            f"{prefix} exited {proc.returncode}: {proc.stderr.strip()}"
         )
     token = proc.stdout.strip()
     if not token:
