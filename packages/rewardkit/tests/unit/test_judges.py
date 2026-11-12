@@ -288,6 +288,29 @@ class TestParseJudgeResponse:
         scores = parse_judge_response(text, criteria, None)
         assert scores[0].value == 0.0
 
+    def test_parse_json_ignores_trailing_brace(self):
+        criteria = [Criterion(description="test", name="test")]
+        scores = parse_judge_response('{"score": "yes"}}', criteria, None)
+        assert scores[0].value == 1.0
+
+    def test_parse_json_uses_first_of_multiple_objects(self):
+        criteria = [Criterion(description="test", name="test")]
+        scores = parse_judge_response(
+            '{"score": "yes"} {"score": "no"}', criteria, None
+        )
+        assert scores[0].value == 1.0
+
+    def test_parse_json_skips_invalid_brace_prefix(self):
+        criteria = [Criterion(description="test", name="test")]
+        scores = parse_judge_response('{x} prose {"score": "yes"}', criteria, None)
+        assert scores[0].value == 1.0
+
+    def test_parse_json_fenced_ignores_trailing_text(self):
+        criteria = [Criterion(description="test", name="test")]
+        text = '```json\n{"score": "yes"}\n``` trailing text'
+        scores = parse_judge_response(text, criteria, None)
+        assert scores[0].value == 1.0
+
     def test_parse_json_invalid_raises(self):
         criteria = [Criterion(description="test", name="test")]
         with pytest.raises(ValueError, match="Could not parse JSON"):
@@ -840,6 +863,7 @@ class TestLLMJudge:
         assert all(s.value == 0.0 and "timed out" in (s.error or "") for s in scores)
         by_name = {s.name: s for s in scores}
         assert by_name["a"].id == "1"
+        assert by_name["a"].raw is None
         assert by_name["a"].negate is True
         assert by_name["b"].id == "2"
         assert by_name["b"].optional is True
@@ -1696,6 +1720,20 @@ class TestJudgeRetry:
         assert "invalid after 3 attempts" in (score.error or "")
         assert "correct" in (score.error or "")
         assert result.warnings[-1].endswith("recording affected criteria as 0.0")
+
+    @patch("rewardkit.judges.litellm")
+    async def test_arun_llm_keeps_invalid_reply_in_error_score(
+        self, mock_litellm, llm_response
+    ):
+        mock_litellm.acompletion = AsyncMock(return_value=llm_response("no json here"))
+        criteria = [Criterion(description="test", name="correct")]
+
+        result = await arun_llm(LLMJudge(), criteria)
+
+        assert mock_litellm.acompletion.call_count == 3
+        (score,) = result.scores
+        assert "invalid after 3 attempts" in (score.error or "")
+        assert score.raw == "no json here"
 
     async def test_agent_error_retries_then_succeeds(self, agent_backend):
         agent_backend.run.side_effect = [
