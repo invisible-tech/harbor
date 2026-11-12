@@ -53,6 +53,7 @@ _TRANSIENT_ERRORS = (
 )
 _MAX_TRANSPORT_ATTEMPTS = 3
 _MIN_ATTEMPT_SECONDS = 1.0
+_RAW_REPLY_CAP = 8000
 
 _TEMPLATES: dict[str, str] = {}
 
@@ -399,20 +400,30 @@ def _check_score_schema(name: str, c: Criterion, raw: Any) -> None:
         )
 
 
+def _first_json_object(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    for i, char in enumerate(text):
+        if char == "{":
+            try:
+                value, _ = decoder.raw_decode(text, i)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+    return None
+
+
 def parse_judge_response(
     text: str,
     criteria: list[Criterion],
     weights: list[float] | None,
 ) -> list[Score]:
     json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if json_match:
-        data = json.loads(json_match.group(1))
-    else:
-        brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-        if brace_match:
-            data = json.loads(brace_match.group(0))
-        else:
-            raise ValueError(f"Could not parse JSON from judge response: {text[:200]}")
+    data = _first_json_object(json_match.group(1)) if json_match else None
+    if data is None:
+        data = _first_json_object(text)
+    if data is None:
+        raise ValueError(f"Could not parse JSON from judge response: {text[:200]}")
 
     # A single criterion returns the flat {"score": ..., "reasoning": ...} shape; wrap it
     # under its name so the loop below treats one and many criteria alike. Detect
@@ -453,11 +464,13 @@ def parse_judge_response(
     return scores
 
 
-def _errored_score(name: str, c: Criterion, weight: float, error: str) -> Score:
+def _errored_score(
+    name: str, c: Criterion, weight: float, error: str, raw: Any = None
+) -> Score:
     return Score(
         name=name,
         value=0.0,
-        raw=None,
+        raw=raw,
         weight=weight,
         error=error,
         description=c.description,
@@ -479,7 +492,11 @@ def _failed_result(
     warn_list.append(f"{error}; recording affected criteria as 0.0")
     scores = [
         _errored_score(
-            c.name or f"criterion_{i}", c, weights[i] if weights else 1.0, error
+            c.name or f"criterion_{i}",
+            c,
+            weights[i] if weights else 1.0,
+            error,
+            raw=output[:_RAW_REPLY_CAP] or None,
         )
         for i, c in enumerate(criteria)
     ]
