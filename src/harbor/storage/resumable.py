@@ -28,7 +28,8 @@ RETRYABLE_UPLOAD_EXCEPTIONS = (httpx.RequestError, ssl.SSLError, json.JSONDecode
 
 
 def retry_transient_or_expired_token_once(retry_state: RetryCallState) -> bool:
-    """Retry predicate: transient errors, plus one retry on a Storage 401.
+    """Retry predicate: transient errors and Storage 429 (server at capacity),
+    plus one retry on a Storage 401.
 
     The 401 retry is granted once per call, whichever attempt the 401 lands on.
 
@@ -37,6 +38,8 @@ def retry_transient_or_expired_token_once(retry_state: RetryCallState) -> bool:
     """
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     if isinstance(exc, RETRYABLE_UPLOAD_EXCEPTIONS):
+        return True
+    if isinstance(exc, StorageApiError) and str(getattr(exc, "status", "")) == "429":
         return True
     if isinstance(exc, StorageApiError) and str(getattr(exc, "status", "")) == "401":
         # ``statistics`` belongs to this call's tenacity copy and is cleared

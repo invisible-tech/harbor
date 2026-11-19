@@ -45,7 +45,7 @@ from harbor.upload.storage import UploadStorage
 
 logger = logging.getLogger(__name__)
 
-TRIAL_DOWNLOAD_CONCURRENCY = 16
+TRIAL_DOWNLOAD_CONCURRENCY = 2
 RETRY_DOWNLOAD_DIR = "_retries"
 
 
@@ -314,9 +314,12 @@ class Downloader:
                 )
             )
 
-        async with asyncio.TaskGroup() as task_group:
-            for trial in download_rows:
-                task_group.create_task(_download_one(trial))
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                for trial in download_rows:
+                    task_group.create_task(_download_one(trial))
+        except ExceptionGroup as group:
+            raise group.exceptions[0] from None
 
         downloaded.sort(key=lambda item: item.row.trial_name)
         n_total_trials = _coerce_int(job.get("n_planned_trials"), default=len(trials))
