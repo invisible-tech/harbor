@@ -5,6 +5,7 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
+    wait_random,
 )
 
 from harbor.auth.client import create_authenticated_client, reset_client
@@ -82,7 +83,7 @@ class UploadStorage:
     @retry(
         retry=resumable.retry_transient_or_expired_token_once,
         stop=stop_after_attempt(DOWNLOAD_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=4.0),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=10.0) + wait_random(0, 1),
         before_sleep=lambda _: reset_client(),
         reraise=True,
     )
@@ -94,7 +95,7 @@ class UploadStorage:
     @retry(
         retry=resumable.retry_transient_or_expired_token_once,
         stop=stop_after_attempt(DOWNLOAD_MAX_ATTEMPTS),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=4.0),
+        wait=wait_exponential(multiplier=0.5, min=0.5, max=10.0) + wait_random(0, 1),
         before_sleep=lambda _: reset_client(),
         reraise=True,
     )
