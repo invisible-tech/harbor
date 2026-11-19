@@ -115,8 +115,8 @@ async def test_download_bytes_raises_after_max_retries(monkeypatch) -> None:
     with pytest.raises(ssl.SSLError):
         await UploadStorage().download_bytes("trial/trial.tar.gz")
 
-    # DOWNLOAD_MAX_ATTEMPTS = 4
-    assert create_client.await_count == 4
+    # DOWNLOAD_MAX_ATTEMPTS = 8
+    assert create_client.await_count == 8
 
 
 @pytest.mark.asyncio
