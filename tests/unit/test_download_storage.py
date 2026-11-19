@@ -143,7 +143,11 @@ def _no_sleep(monkeypatch):
     async def sleep(_s):
         return None
 
-    for fn in (UploadStorage.download_file, UploadStorage.upload_file):
+    for fn in (
+        UploadStorage.download_bytes,
+        UploadStorage.download_file,
+        UploadStorage.upload_file,
+    ):
         monkeypatch.setattr(fn.retry, "sleep", sleep)
 
 
@@ -388,3 +392,13 @@ async def test_other_statuses_after_transient_not_retried(
             await call()
 
     assert op.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_download_bytes_retries_429_at_capacity(
+    patched_client, _no_sleep
+) -> None:
+    bucket, _, _ = patched_client
+    bucket.download.side_effect = [_api_error(429), _api_error(429), b"ok"]
+
+    assert await UploadStorage().download_bytes("a/b") == b"ok"

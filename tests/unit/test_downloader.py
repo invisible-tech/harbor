@@ -264,6 +264,36 @@ class TestDownloadJob:
         assert job_result.stats.n_pending_trials == 0
 
     @pytest.mark.asyncio
+    async def test_trial_download_failure_surfaces_the_storage_error(
+        self, tmp_path: Path, mock_downloader: Downloader
+    ) -> None:
+        from storage3.exceptions import StorageApiError
+
+        job_id = uuid4()
+        t1 = uuid4()
+        mock_downloader.db.get_job.return_value = {
+            "id": str(job_id),
+            "job_name": "hosted",
+            "archive_path": None,
+            "config": {},
+            "n_planned_trials": 1,
+        }
+        mock_downloader.db.list_trial_downloads_for_job.return_value = _trial_rows(
+            {
+                "id": str(t1),
+                "trial_name": "t1",
+                "archive_path": f"trials/{t1}/trial.tar.gz",
+                "status": "completed",
+            }
+        )
+        mock_downloader.storage.download_bytes.side_effect = StorageApiError(
+            "Archive downloads are at capacity", "TooManyRequests", 429
+        )
+
+        with pytest.raises(StorageApiError):
+            await mock_downloader.download_job(job_id, tmp_path)
+
+    @pytest.mark.asyncio
     async def test_reconstructs_retries_into_unique_directories(
         self, tmp_path: Path, mock_downloader: Downloader
     ) -> None:
